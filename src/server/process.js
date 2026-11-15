@@ -1,8 +1,13 @@
 /**
  * Start / stop Node acodels backend without opening a terminal UI.
+ *
+ * IMPORTANT: Executor spawns a fresh proot per call and proot runs with
+ * --kill-on-exit, so a `nohup node &` is killed the moment the command ends.
+ * Fix: run node in the FOREGROUND of an un-awaited Executor.execute() call.
+ * That promise stays pending while the server lives, which keeps proot alive.
  */
 import { getSettings, updateSetting } from '../core/settings.js';
-import { silentExec, shellEscape } from '../utils/alpineExec.js';
+import { silentExec, wrapSh, getExecutor } from '../utils/alpineExec.js';
 import { resolveAcodelsPath, ensureLiveServerDeps } from '../deps/dependencyChecker.js';
 import { ensureFullAcodelsIndex } from './ensureAcodelsIndex.js';
 import { getEffectiveRoot } from './rootFolder.js';
@@ -14,38 +19,49 @@ const toast = acode.require('toast');
 
 let baseUrlRef = '';
 let inactivityTimer = null;
+/** token of the currently running foreground node call (null = none) */
+let serverProc = null;
 
 export function setProcessBaseUrl(url) {
   baseUrlRef = url || '';
 }
 
-async function isPortAlive(port) {
-  const p = String(parseInt(port, 10) || 8080);
-  // Same namespace as node (Executor) — no node -e / no parentheses in sh
-  try {
-    const out = await silentExec(
-      'if command -v wget >/dev/null 2>&1; then wget -qO- --timeout=2 http://127.0.0.1:' +
-        p +
-        '/check 2>/dev/null; elif command -v curl >/dev/null 2>&1; then curl -s --max-time 2 http://127.0.0.1:' +
-        p +
-        '/check 2>/dev/null; else echo NOCLIENT; fi',
-      { timeoutMs: 6000 }
-    );
-    const s = String(out || '');
-    if (/Ready|AcodeLiveServer|"port"/i.test(s)) return true;
-  } catch (_) {}
+/** Fast check via WebView fetch */
+async function fetchAlive(port) {
   try {
     const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 1000);
-    const res = await fetch('http://127.0.0.1:' + p + '/check', { signal: ctrl.signal });
+    const to = setTimeout(() => ctrl.abort(), 1200);
+    const res = await fetch('http://127.0.0.1:' + port + '/check', { signal: ctrl.signal });
     clearTimeout(to);
-    if (res && res.ok) return true;
-  } catch (_) {}
-  return false;
+    return !!(res && res.ok);
+  } catch (_) {
+    return false;
+  }
 }
 
+/** Slow check via wget/curl inside Alpine (spawns proot — use sparingly) */
+async function shellAlive(port) {
+  try {
+    const out = await silentExec(
+      'if command -v wget >/dev/null 2>&1; then wget -qO- -T 2 http://127.0.0.1:' +
+        port +
+        '/check 2>/dev/null; elif command -v curl >/dev/null 2>&1; then curl -s --max-time 2 http://127.0.0.1:' +
+        port +
+        '/check 2>/dev/null; else echo NOCLIENT; fi',
+      { timeoutMs: 8000 }
+    );
+    return /Ready|AcodeLiveServer|"port"/i.test(String(out || ''));
+  } catch (_) {
+    return false;
+  }
+}
 
-
+async function isPortAlive(port, opts = {}) {
+  const p = String(parseInt(port, 10) || 8080);
+  if (await fetchAlive(p)) return true;
+  if (opts.deep) return shellAlive(p);
+  return false;
+}
 
 function parseCustomHeaders(text) {
   const out = {};
@@ -130,9 +146,7 @@ function armInactivityTimer() {
       clearInactivityTimer();
       return;
     }
-    // soft: if still running past window, stop (simple idle policy)
     if (Date.now() - (st.startedAt || started) > ms) {
-      // check backend lastActivity if possible
       try {
         const res = await fetch(`http://127.0.0.1:${st.port}/status`);
         const data = await res.json();
@@ -142,6 +156,42 @@ function armInactivityTimer() {
       stopServer();
     }
   }, 30000);
+}
+
+/**
+ * Launch node in the foreground of a long-lived Executor call.
+ * Returns immediately (does NOT await node).
+ */
+function launchNodeForeground(port, acodelsPath) {
+  const ex = getExecutor();
+  if (!ex?.execute) throw new Error('Executor not available. Open Acode Terminal once, then retry.');
+
+  const startCmd =
+    'ACODIR=""; ' +
+    'for d in "' + String(acodelsPath || '').replace(/"/g, '') + '" /root/.acode_liveserver/acodels /home/root/.acode_liveserver/acodels; do ' +
+    '[ -n "$d" ] || continue; ' +
+    'if [ -f "$d/index.js" ] && [ -d "$d/node_modules" ]; then ACODIR="$d"; break; fi; done; ' +
+    '[ -z "$ACODIR" ] && { echo acodels_not_found; exit 1; }; ' +
+    'cd "$ACODIR" || exit 1; ' +
+    'NODE_PATH="$ACODIR/node_modules" exec node index.js ' + String(port) + ' 0.0.0.0 >liveserver.log 2>&1';
+
+  const token = {};
+  serverProc = token;
+
+  // Do NOT await: stays pending while node runs, which keeps proot alive.
+  ex.execute(wrapSh(startCmd), true)
+    .then((out) => console.log('[LiveServer] node exited', String(out || '').slice(0, 200)))
+    .catch((e) => console.warn('[LiveServer] node exited', String(e?.message || e).slice(0, 200)))
+    .finally(() => {
+      if (serverProc !== token) return; // stopped/restarted on purpose
+      serverProc = null;
+      if (getServerStatus().running) {
+        setServerStatus({ running: false, lastError: 'server process exited' });
+        try {
+          window.dispatchEvent(new CustomEvent('liveserver-stopped'));
+        } catch (_) {}
+      }
+    });
 }
 
 export async function startServer(opts = {}) {
@@ -162,7 +212,7 @@ export async function startServer(opts = {}) {
   const s = getSettings();
   const nodeBind = '0.0.0.0';
 
-  if (!(await isPortAlive(port))) {
+  if (!(await isPortAlive(port, { deep: true }))) {
     const acodels = await resolveAcodelsPath(baseUrlRef);
     try {
       await ensureFullAcodelsIndex(acodels);
@@ -170,40 +220,9 @@ export async function startServer(opts = {}) {
       console.warn('[LiveServer] ensure index', e);
     }
 
-    const cmd =
-      'set +e; ' +
-      'ACODIR=""; ' +
-      'for d in /root/.acode_liveserver/acodels /home/root/.acode_liveserver/acodels; do ' +
-      'if [ -f "$d/index.js" ] && [ -d "$d/node_modules" ]; then ACODIR="$d"; break; fi; done; ' +
-      'if [ -z "$ACODIR" ]; then echo acodels_not_found; exit 0; fi; ' +
-      'echo using=$ACODIR; ' +
-      'echo node_bin=$(command -v node); node -v 2>&1; ' +
-      'cd "$ACODIR" || { echo cd_fail; exit 0; }; ' +
-      'echo mods express=$(test -d node_modules/express && echo y || echo n) ' +
-      'ws=$(test -d node_modules/ws && echo y || echo n) ' +
-      'chokidar=$(test -d node_modules/chokidar && echo y || echo n) ' +
-      'cors=$(test -d node_modules/cors && echo y || echo n); ' +
-      'rm -f "$ACODIR/liveserver.log"; ' +
-      'NODE_PATH="$ACODIR/node_modules" nohup node "$ACODIR/index.js" ' +
-      String(port) +
-      ' 0.0.0.0 >>"$ACODIR/liveserver.log" 2>&1 & ' +
-      'echo pid=$!; ' +
-      'sleep 2; ' +
-      'echo log_tail_begin; ' +
-      'cat "$ACODIR/liveserver.log" 2>/dev/null; ' +
-      'echo log_tail_end; ' +
-      'echo ps_node; ps 2>/dev/null | grep node | head -n 5; ' +
-      'if command -v wget >/dev/null 2>&1; then echo wget:; wget -qO- --timeout=2 http://127.0.0.1:' +
-      String(port) +
-      '/check; echo wget_ec=$?; ' +
-      'elif command -v curl >/dev/null 2>&1; then echo curl:; curl -s --max-time 2 http://127.0.0.1:' +
-      String(port) +
-      '/check; echo curl_ec=$?; else echo no_http_client; fi';
-
     toast('Starting server…', 1200);
     try {
-      const out = await silentExec(cmd, { timeoutMs: 0 });
-      console.log('[LiveServer] start out', out);
+      launchNodeForeground(port, acodels);
     } catch (e) {
       setServerStatus({ running: false, lastError: String(e?.message || e) });
       toast('Start failed: ' + (e?.message || e), 3000);
@@ -211,23 +230,28 @@ export async function startServer(opts = {}) {
     }
 
     let up = false;
-    for (let i = 0; i < 50; i++) {
-      await new Promise((r) => setTimeout(r, 300));
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 400));
       if (await isPortAlive(port)) {
         up = true;
         break;
       }
+      // node already died? (token cleared by .finally)
+      if (!serverProc) break;
     }
+    if (!up && serverProc) up = await isPortAlive(port, { deep: true });
+
     if (!up) {
       try {
         const log = await silentExec(
-          'tail -n 40 /root/.acode_liveserver/acodels/liveserver.log 2>/dev/null; echo ---; ps 2>/dev/null | grep node | head -n 5',
+          'tail -n 40 /root/.acode_liveserver/acodels/liveserver.log 2>/dev/null',
           { timeoutMs: 8000 }
         );
-        console.warn('[LiveServer] start timeout log', log);
+        console.warn('[LiveServer] start failed, log:', log);
       } catch (_) {}
-      toast('Server start timed out — see console log', 3500);
-      setServerStatus({ running: false, lastError: 'timeout' });
+      toast('Server failed to start — see console log', 3500);
+      setServerStatus({ running: false, lastError: 'start failed' });
+      serverProc = null;
       return false;
     }
   }
@@ -277,16 +301,16 @@ export async function stopServer() {
   clearInactivityTimer();
   const st = getServerStatus();
   const port = st.port || getConfiguredPort();
+  serverProc = null; // so the foreground call's .finally() stays quiet
   try {
     await silentExec(
-      `(pkill -f "node index.js ${port}" 2>/dev/null; fuser -k ${port}/tcp 2>/dev/null; true)`,
-      15000
+      '(pkill -f "node index.js ' + port + '" 2>/dev/null; fuser -k ' + port + '/tcp 2>/dev/null; true)',
+      { timeoutMs: 15000 } // object form — a bare number would disable alpine mode
     );
   } catch (_) {}
-  // confirm down
   for (let i = 0; i < 8; i++) {
     if (!(await isPortAlive(port))) break;
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 200));
   }
   setServerStatus({
     running: false,
