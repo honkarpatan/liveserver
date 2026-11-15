@@ -1,20 +1,30 @@
 {
-  "id":"acode.plugin.sugerserver",
-  "name":"HTML Server (Eruda/Suger)",
-  "main":"main.js",
-  "version":"1.0.7",
-  "readme":"readme.md",
-  "icon":"icon.png",
-  "files":[],
-  "minVersionCode":290,
-  "license":"",
-  "changelogs":"changelogs.md",
-  "keywords":["Live Server","live","HTML Viewer","Suger","Dev Tool","Eruda inspetor"],
-  "price":25,
-  "repository":"",
-  "author":{
-    "name":"Dev.Sourav",
-    "email":"devs.sourav@gmail.com",
-    "github":"Sou6900"
+  "id": "acode.plugin.sugerserver",
+  "name": "Live Server",
+  "main": "main.js",
+  "version": "2.0.0",
+  "readme": "readme.md",
+  "icon": "icon.png",
+  "files": [
+    "acodels/",
+    "icon.png",
+    "readme.md"
+  ],
+  "minVersionCode": 290,
+  "license": "",
+  "changelogs": "changelogs.md",
+  "keywords": [
+    "Live Server",
+    "HTML",
+    "HTTP",
+    "browser",
+    "preview"
+  ],
+  "price": 25,
+  "repository": "",
+  "author": {
+    "name": "Dev.Sourav",
+    "email": "devs.sourav@gmail.com",
+    "github": "Sou6900"
   }
 }
