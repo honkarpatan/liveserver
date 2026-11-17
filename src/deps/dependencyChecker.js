@@ -1,5 +1,6 @@
 /**
- * Node / npm / acodels node_modules — once per session check + install
+ * Node / npm / acodels node_modules + optional Chromium browser engine check & install.
+ * Chromium appears in the dependencies list as optional & unselected by default.
  */
 import { getSettings, updateSetting } from '../core/settings.js';
 import {
@@ -17,6 +18,7 @@ import {
   resetInstallCancel,
   closeDepsPicker,
 } from './depsPicker.js';
+import { showChromiumInstallerPopup } from '../ui/chromiumInstaller.js';
 
 const toast = acode.require('toast');
 const confirm = acode.require('confirm');
@@ -35,16 +37,25 @@ export const DEP_CATALOG = [
     desc: 'Backend node_modules (express, ws, chokidar)',
     required: true,
   },
+  {
+    id: 'chromium',
+    label: 'chromium (optional)',
+    desc: 'Headless browser for heavy JS websites (~180MB)',
+    required: false,
+    optional: true,
+  },
 ];
 
-/**
- * Resolve a path the Executor shell can actually write (Alpine/Termux $HOME).
- * Never hardcode /data/data/com.termux — Alpine proot cannot mkdir there.
- */
-export async function resolveAcodelsPath(baseUrl) {
-  const s = getSettings();
+export async function isChromiumInstalled() {
+  try {
+    if (await commandExists('chromium')) return true;
+    if (await commandExists('chromium-browser')) return true;
+  } catch (_) {}
+  return false;
+}
 
-  // Fast probe only — no find (find hangs under proot and trips 30s timeout)
+export async function resolveAcodelsPath() {
+  const s = getSettings();
   try {
     const out = await silentExec(
       `for d in /root/.acode_liveserver/acodels /home/root/.acode_liveserver/acodels "$HOME/.acode_liveserver/acodels"; do
@@ -52,12 +63,13 @@ export async function resolveAcodelsPath(baseUrl) {
   if [ -d "$d/node_modules/express" ]; then echo "FULL:$d"; exit 0; fi
   echo "BARE:$d"
 done
-exit 0
-`,
+exit 0`,
       { timeoutMs: 12000 }
     );
-    const lines = String(out || '').split(String.fromCharCode(10)).map((l) => l.trim()).filter(Boolean);
-    console.log('[LiveServer:deps] probe', lines.slice(0, 8));
+    const lines = String(out || '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
     const full = lines.filter((l) => l.startsWith('FULL:')).map((l) => l.slice(5));
     const bare = lines.filter((l) => l.startsWith('BARE:')).map((l) => l.slice(5));
     const prefer = (list) => {
@@ -69,13 +81,11 @@ exit 0
     const best = prefer(full) || prefer(bare);
     if (best) {
       try { updateSetting('acodelsPath', best); } catch (_) {}
-      console.log('[LiveServer:deps] acodels path', best);
       return best;
     }
   } catch (e) {
     console.warn('[LiveServer:deps] probe', e?.message || e);
   }
-
   const saved = String(s.acodelsPath || '').trim();
   if (saved && !saved.startsWith('/public') && !saved.includes('com.termux')) {
     return saved;
@@ -88,9 +98,11 @@ async function acodelsModulesPresent(acodelsPath) {
   try {
     const extra = acodelsPath ? shellEscape(acodelsPath) : "''";
     const out = await silentExec(
-      "for d in " + extra + ' /root/.acode_liveserver/acodels "$HOME/.acode_liveserver/acodels"; do '
-      + '[ -d "$d/node_modules/express" ] && [ -d "$d/node_modules/ws" ] && echo OK && exit 0; '
-      + 'done; echo MISS',
+      'for d in ' +
+        extra +
+        ' /root/.acode_liveserver/acodels "$HOME/.acode_liveserver/acodels"; do ' +
+        '[ -d "$d/node_modules/express" ] && [ -d "$d/node_modules/ws" ] && echo OK && exit 0; ' +
+        'done; echo MISS',
       { timeoutMs: 10000 }
     );
     return String(out).includes('OK');
@@ -99,24 +111,28 @@ async function acodelsModulesPresent(acodelsPath) {
   }
 }
 
-
-
 export async function scanAllDeps(baseUrl) {
   lastBaseUrl = baseUrl || lastBaseUrl;
   const nodeOk = await commandExists('node');
   const npmOk = await commandExists('npm');
   const acodelsPath = await resolveAcodelsPath(baseUrl);
   const modsOk = nodeOk ? await acodelsModulesPresent(acodelsPath) : false;
+  const chromiumOk = await isChromiumInstalled();
+
+  updateSetting('chromiumInstalled', chromiumOk);
+
   return [
     { ...DEP_CATALOG[0], present: nodeOk },
     { ...DEP_CATALOG[1], present: npmOk },
     { ...DEP_CATALOG[2], present: modsOk, path: acodelsPath },
+    { ...DEP_CATALOG[3], present: chromiumOk },
   ];
 }
 
 export async function verifyDependencies(baseUrl) {
   const all = await scanAllDeps(baseUrl);
-  const missing = all.filter((d) => !d.present).map((d) => d.id);
+  // Only required items block server start; chromium is optional
+  const missing = all.filter((d) => d.required !== false && !d.present).map((d) => d.id);
   return { ok: missing.length === 0, missing, all };
 }
 
@@ -124,14 +140,15 @@ function toPickerItems(all) {
   return all.map((d) => ({
     id: d.id,
     label: d.label,
-    desc: d.desc + (d.path ? ` · ${d.path}` : ''),
+    desc: d.desc + (d.path ? ` — ${d.path}` : ''),
     present: d.present,
-    checked: !d.present,
+    optional: d.optional === true,
+    // Chromium is unselected by default even when not installed
+    checked: d.optional ? false : !d.present,
   }));
 }
 
 async function installNodePackages() {
-  // Termux first (Acode common), then apk, then apt — no artificial short timeout
   const script = `#!/bin/sh
 set +e
 echo "[pm] detecting..."
@@ -141,6 +158,7 @@ if command -v pkg >/dev/null 2>&1; then
   pkg install -y nodejs 2>&1 || pkg install -y nodejs-lts 2>&1
 elif command -v apk >/dev/null 2>&1; then
   echo "[pm] apk"
+  apk update 2>&1
   apk add --no-cache nodejs npm 2>&1
 elif command -v apt-get >/dev/null 2>&1; then
   echo "[pm] apt"
@@ -150,8 +168,6 @@ else
   echo "[pm] none found"
   exit 1
 fi
-echo "[which] node=$(command -v node 2>/dev/null)"
-echo "[which] npm=$(command -v npm 2>/dev/null)"
 node -v 2>&1
 npm -v 2>&1
 echo "[done] node packages"
@@ -159,7 +175,7 @@ echo "[done] node packages"
   return silentExecScript(script, { timeoutMs: 0 });
 }
 
-async function ensureAcodelsSources(acodelsPath, pluginBaseUrl) {
+async function ensureAcodelsSources(acodelsPath) {
   const script = `#!/bin/sh
 set +e
 DIR=${shellEscape(acodelsPath)}
@@ -169,12 +185,9 @@ esac
 if [ -z "$DIR" ] || echo "$DIR" | grep -q com.termux; then
   DIR="/root/.acode_liveserver/acodels"
 fi
-echo "[acodels] HOME=$HOME"
-echo "[acodels] DIR=$DIR"
 mkdir -p "$DIR" 2>&1
 cd "$DIR" || { echo "[acodels] cd failed"; exit 1; }
 if [ ! -f package.json ]; then
-  echo "[acodels] writing package.json"
   cat > package.json << 'JSON'
 {
   "name": "acodels",
@@ -190,10 +203,7 @@ if [ ! -f package.json ]; then
 JSON
 fi
 echo "[acodels] npm install in $DIR"
-npm install --omit=dev 2>&1
-echo "[test] express=$(test -d node_modules/express && echo ok || echo miss)"
-echo "[test] ws=$(test -d node_modules/ws && echo ok || echo miss)"
-echo "[pwd] $(pwd)"
+npm install --omit=dev --no-audit --no-fund 2>&1
 echo "[done] acodels"
 `;
   return silentExecScript(script, { timeoutMs: 0 });
@@ -204,14 +214,12 @@ export async function showDepsPickerFlow(opts = {}) {
   lastBaseUrl = baseUrl;
 
   if (installInFlight) {
-    toast('Install already running…', 2000);
+    toast('Install already running...', 2000);
     return false;
   }
   if (isDepsPickerOpen() && !opts.force) {
-    toast('Dependency UI already open…', 2000);
     return false;
   }
-
   if (!opts.force && !opts.fromSettings && dismissedUntilRestart) return false;
 
   if (!opts.force && !opts.fromSettings) {
@@ -222,15 +230,13 @@ export async function showDepsPickerFlow(opts = {}) {
     }
   }
 
-  // Executor preflight
   if (!getExecutor()?.execute) {
     toast('Open Acode Terminal once, then retry Install', 3500);
-    console.warn('[LiveServer:deps] Executor missing before picker');
   }
 
   const promise = openDepsPicker({
     title: 'Live Server Dependencies',
-    subtitle: 'Checking…',
+    subtitle: 'Checking...',
     items: [],
     checking: true,
   });
@@ -248,29 +254,32 @@ export async function showDepsPickerFlow(opts = {}) {
     return false;
   }
 
-  const miss = all.filter((d) => !d.present).length;
+  const miss = all.filter((d) => d.required !== false && !d.present).length;
   updateDepsPicker({
     checking: false,
     subtitle:
       miss === 0
-        ? 'All required tools present'
-        : `${miss} missing · tick what to install`,
+        ? 'All required tools present (Chromium is optional)'
+        : `${miss} required missing — tick what to install`,
     items: toPickerItems(all),
   });
 
   const result = await promise;
-
   if (result.action === 'notnow' || result.action === 'close' || result.action === 'cancel') {
     dismissedUntilRestart = true;
-    if (result.action === 'notnow') toast('Skipped for this session', 2000);
     return false;
   }
-
   if (result.action === 'done') {
     return (await verifyDependencies(baseUrl)).ok;
   }
 
   if (result.action === 'install' && result.selected?.length) {
+    const onlyChromium = result.selected.length === 1 && result.selected[0] === 'chromium';
+    if (onlyChromium) {
+      closeDepsPicker(true);
+      return showChromiumInstallerPopup({ startImmediately: true });
+    }
+
     installInFlight = true;
     resetInstallCancel();
 
@@ -279,11 +288,9 @@ export async function showDepsPickerFlow(opts = {}) {
         progressMode: true,
         percent: 0,
         info: 'Executor not available',
-        logAppend:
-          'Open Acode Terminal once (Alpine/Termux), then open this dialog again and Install.\n',
+        logAppend: 'Open Acode Terminal once (Alpine/Termux), then open this dialog again.\n',
         showDone: true,
       });
-      toast('Executor missing — open Terminal first', 3500);
       installInFlight = false;
       return false;
     }
@@ -291,7 +298,7 @@ export async function showDepsPickerFlow(opts = {}) {
     updateDepsPicker({
       progressMode: true,
       percent: 5,
-      info: 'Preparing…',
+      info: 'Preparing...',
       logAppend: 'Selected: ' + result.selected.join(', ') + '\n',
     });
 
@@ -301,7 +308,7 @@ export async function showDepsPickerFlow(opts = {}) {
       if (result.selected.includes('node') || result.selected.includes('npm')) {
         updateDepsPicker({
           percent: 15,
-          info: 'Installing Node.js / npm (may take several minutes)…',
+          info: 'Installing Node.js / npm...',
           logAppend: '\n=== node / npm ===\n',
         });
         if (wasInstallCancelled()) {
@@ -310,39 +317,35 @@ export async function showDepsPickerFlow(opts = {}) {
         }
         const out = await installNodePackages();
         updateDepsPicker({
-          percent: 50,
+          percent: 48,
           logAppend: String(out || '').slice(-2500) + '\n',
         });
       }
 
       if (result.selected.includes('acodels')) {
         updateDepsPicker({
-          percent: 60,
-          info: 'npm install in acodels…',
+          percent: 58,
+          info: 'Installing backend modules in acodels...',
           logAppend: `\n=== acodels @ ${acodelsPath} ===\n`,
         });
         if (wasInstallCancelled()) {
           installInFlight = false;
           return false;
         }
-        const out2 = await ensureAcodelsSources(acodelsPath, baseUrl);
+        const out2 = await ensureAcodelsSources(acodelsPath);
         updateDepsPicker({
-          percent: 90,
+          percent: 82,
           logAppend: String(out2 || '').slice(-3000) + '\n',
         });
-        try {
-          const real = await silentExec(
-            `echo "$HOME/.acode_liveserver/acodels"`,
-            { timeoutMs: 10000 }
-          );
-          const pathLine = String(real || '')
-            .split(String.fromCharCode(10))
-            .map((l) => l.trim())
-            .find((l) => l.startsWith('/') && l.includes('acodels'));
-          updateSetting('acodelsPath', pathLine || acodelsPath.replace(/^\$HOME/, ''));
-        } catch (_) {
-          try { updateSetting('acodelsPath', acodelsPath); } catch (__) {}
-        }
+      }
+
+      if (result.selected.includes('chromium')) {
+        closeDepsPicker(true);
+        installInFlight = false;
+        await showChromiumInstallerPopup({ startImmediately: true });
+        const after = await verifyDependencies(baseUrl);
+        updateSetting('dependenciesInstalled', after.ok);
+        return after.ok;
       }
 
       const after = await verifyDependencies(baseUrl);
@@ -357,13 +360,9 @@ export async function showDepsPickerFlow(opts = {}) {
       if (after.ok) {
         dismissedUntilRestart = true;
         toast('Dependencies ready', 2500);
-      } else {
-        toast('Still missing: ' + after.missing.join(', '), 4000);
       }
-      // Do NOT auto-close — user taps Close
       return after.ok;
     } catch (e) {
-      console.warn('[LiveServer:deps] install', e);
       updateDepsPicker({
         progressMode: true,
         percent: 100,
@@ -371,13 +370,11 @@ export async function showDepsPickerFlow(opts = {}) {
         showDone: true,
         logAppend: '\nERROR: ' + (e?.message || e) + '\n',
       });
-      toast('Install error: ' + (e?.message || e), 4000);
       return false;
     } finally {
       installInFlight = false;
     }
   }
-
   return false;
 }
 
@@ -386,9 +383,8 @@ export async function ensureLiveServerDeps(opts = {}) {
   lastBaseUrl = baseUrl;
   try {
     if (!opts.force && dismissedUntilRestart) return true;
-    if (!opts.force && checkedThisSession) {
-      const v = await verifyDependencies(baseUrl);
-      return v.ok;
+    if (!opts.force && checkedThisSession && getSettings().dependenciesInstalled === true) {
+      return true;
     }
     checkedThisSession = true;
     const v = await verifyDependencies(baseUrl);

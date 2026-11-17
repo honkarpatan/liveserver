@@ -1,5 +1,6 @@
 /**
- * Deps picker — Install keeps dialog open for progress (does not close immediately)
+ * Desktop Linux-themed Dependencies Checker & Installer Popup.
+ * Matches Chromium Installer UI & follows Acode's active CSS color theme.
  */
 import { injectDepsPickerCss } from './injectDepsCss.js';
 
@@ -9,10 +10,10 @@ let cancelled = false;
 
 function escapeHtml(s) {
   return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"');
 }
 
 export function isDepsPickerOpen() {
@@ -34,8 +35,9 @@ export function openDepsPicker(opts = {}) {
   injectDepsPickerCss();
   closeDepsPicker(true);
   cancelled = false;
+
   const title = opts.title || 'Live Server Dependencies';
-  const subtitle = opts.subtitle || '';
+  const subtitle = opts.subtitle || 'Checking Alpine Linux packages...';
   const items = Array.isArray(opts.items) ? opts.items.slice() : [];
 
   return new Promise((resolve) => {
@@ -44,27 +46,49 @@ export function openDepsPicker(opts = {}) {
     root.id = 'ls-deps-picker';
     root.innerHTML = `
       <div class="ls-dp-backdrop"></div>
-      <div class="ls-dp-card" role="dialog">
-        <div class="ls-dp-header">
-          <div class="ls-dp-title">${escapeHtml(title)}</div>
-          <div class="ls-dp-subtitle">${escapeHtml(subtitle)}</div>
+      <div class="ls-dp-card" role="dialog" aria-modal="true">
+        <div class="ls-dp-titlebar">
+          <div class="ls-dp-title-left">
+            <span class="ls-dp-dots"><span></span><span></span><span></span></span>
+            <div class="ls-dp-title">${escapeHtml(title)}</div>
+          </div>
         </div>
+        <div class="ls-dp-subbar ls-dp-subtitle">${escapeHtml(subtitle)}</div>
+
         <div class="ls-dp-body">
           <div class="ls-dp-checking" style="display:${opts.checking ? 'flex' : 'none'}">
             <span class="ls-dp-spinner"></span>
-            <span>Checking dependencies…</span>
+            <span>Scanning Alpine environment...</span>
           </div>
+
           <div class="ls-dp-lists" style="display:${opts.checking ? 'none' : 'block'}"></div>
+
           <div class="ls-dp-progress" style="display:none">
-            <div class="ls-dp-progress-track"><div class="ls-dp-progress-bar" style="width:0%"></div></div>
-            <div class="ls-dp-progress-info">Installing…</div>
-            <button type="button" class="ls-dp-link ls-dp-toggle-log">Expand details</button>
+            <div class="ls-dp-warn">
+              <span>⚠</span>
+              <span>Don't close Acode while packages are installing.</span>
+            </div>
+
+            <div class="ls-dp-prog-top">
+              <div class="ls-dp-progress-info">Preparing installation...</div>
+              <span class="ls-dp-pct">0%</span>
+            </div>
+
+            <div class="ls-dp-progress-track">
+              <div class="ls-dp-progress-bar" style="width:0%"></div>
+            </div>
+
+            <button type="button" class="ls-dp-link ls-dp-toggle-log">
+              <span class="ls-dp-arrow">▸</span>
+              <span class="ls-dp-more-label">Show more</span>
+            </button>
             <pre class="ls-dp-log" style="display:none"></pre>
           </div>
         </div>
+
         <div class="ls-dp-footer">
           <button type="button" class="ls-dp-btn ls-dp-notnow">Not now</button>
-          <button type="button" class="ls-dp-btn ls-dp-cancel" style="display:none">Cancel</button>
+          <button type="button" class="ls-dp-btn ls-dp-cancel" style="display:none">Cancel installation</button>
           <button type="button" class="ls-dp-btn ls-dp-install">Install selected</button>
           <button type="button" class="ls-dp-btn ls-dp-done" style="display:none">Close</button>
         </div>
@@ -75,6 +99,7 @@ export function openDepsPicker(opts = {}) {
     const checkingEl = root.querySelector('.ls-dp-checking');
     const progressEl = root.querySelector('.ls-dp-progress');
     const barEl = root.querySelector('.ls-dp-progress-bar');
+    const pctEl = root.querySelector('.ls-dp-pct');
     const infoEl = root.querySelector('.ls-dp-progress-info');
     const logEl = root.querySelector('.ls-dp-log');
     const installBtn = root.querySelector('.ls-dp-install');
@@ -82,6 +107,8 @@ export function openDepsPicker(opts = {}) {
     const cancelBtn = root.querySelector('.ls-dp-cancel');
     const doneBtn = root.querySelector('.ls-dp-done');
     const toggleLog = root.querySelector('.ls-dp-toggle-log');
+    const arrowEl = root.querySelector('.ls-dp-arrow');
+    const moreLabel = root.querySelector('.ls-dp-more-label');
     const subtitleEl = root.querySelector('.ls-dp-subtitle');
     const backdrop = root.querySelector('.ls-dp-backdrop');
 
@@ -91,9 +118,12 @@ export function openDepsPicker(opts = {}) {
       for (const it of items) {
         const status = it.present
           ? '<span class="ls-dp-status ok">installed</span>'
-          : '<span class="ls-dp-status miss">missing</span>';
+          : it.optional
+            ? '<span class="ls-dp-status opt">optional</span>'
+            : '<span class="ls-dp-status miss">missing</span>';
+        const isChecked = it.checked != null ? !!it.checked : !it.present && !it.optional;
         html += `<label class="ls-dp-row ${it.present ? 'is-present' : 'is-missing'}">
-          <input type="checkbox" data-id="${escapeHtml(it.id)}" ${it.checked ? 'checked' : ''} ${it.present ? 'disabled' : ''}/>
+          <input type="checkbox" data-id="${escapeHtml(it.id)}" ${isChecked ? 'checked' : ''} ${it.present ? 'disabled' : ''}/>
           <span class="ls-dp-row-main">
             <span class="ls-dp-name">${escapeHtml(it.label)}</span>
             <span class="ls-dp-desc">${escapeHtml(it.desc || '')}</span>
@@ -118,7 +148,6 @@ export function openDepsPicker(opts = {}) {
       if (r) r({ action, selected });
     }
 
-    /** Install: keep open, show progress shell, resolve so parent can run install */
     function beginInstall() {
       const selected = getSelected();
       if (!selected.length) {
@@ -130,15 +159,16 @@ export function openDepsPicker(opts = {}) {
       cancelled = false;
       if (listsEl) listsEl.style.display = 'none';
       if (checkingEl) checkingEl.style.display = 'none';
-      if (progressEl) progressEl.style.display = 'block';
+      if (progressEl) progressEl.style.display = 'flex';
       if (installBtn) installBtn.style.display = 'none';
       if (notNowBtn) notNowBtn.style.display = 'none';
       if (cancelBtn) cancelBtn.style.display = 'inline-block';
       if (doneBtn) doneBtn.style.display = 'none';
       if (barEl) barEl.style.width = '2%';
-      if (infoEl) infoEl.textContent = 'Starting…';
+      if (pctEl) pctEl.textContent = '2%';
+      if (infoEl) infoEl.textContent = 'Initializing package installer...';
       if (logEl) logEl.textContent = '';
-      if (subtitleEl) subtitleEl.textContent = 'Installing selected packages…';
+      if (subtitleEl) subtitleEl.textContent = 'Installing selected packages in Alpine Linux...';
 
       const r = resolvePromise;
       resolvePromise = null;
@@ -149,12 +179,11 @@ export function openDepsPicker(opts = {}) {
     notNowBtn?.addEventListener('click', () => finishAndClose('notnow'));
     cancelBtn?.addEventListener('click', () => {
       cancelled = true;
-      if (infoEl) infoEl.textContent = 'Cancelled…';
+      if (infoEl) infoEl.textContent = 'Cancelled';
       finishAndClose('cancel');
     });
     doneBtn?.addEventListener('click', () => finishAndClose('done'));
     backdrop?.addEventListener('click', () => {
-      // only dismiss if not mid-install
       if (progressEl && progressEl.style.display !== 'none' && cancelBtn?.style.display !== 'none') {
         return;
       }
@@ -164,7 +193,9 @@ export function openDepsPicker(opts = {}) {
       if (!logEl) return;
       const open = logEl.style.display !== 'none';
       logEl.style.display = open ? 'none' : 'block';
-      toggleLog.textContent = open ? 'Expand details' : 'Hide details';
+      if (arrowEl) arrowEl.textContent = open ? '▸' : '▾';
+      if (moreLabel) moreLabel.textContent = open ? 'Show more' : 'Show less';
+      if (!open) logEl.scrollTop = logEl.scrollHeight;
     });
 
     root._lsDpUpdate = (status) => {
@@ -182,7 +213,7 @@ export function openDepsPicker(opts = {}) {
         status.items.forEach((it) =>
           items.push({
             ...it,
-            checked: it.checked != null ? !!it.checked : !it.present,
+            checked: it.checked != null ? !!it.checked : !it.present && !it.optional,
           })
         );
         renderLists();
@@ -190,14 +221,16 @@ export function openDepsPicker(opts = {}) {
       if (status.progressMode) {
         if (listsEl) listsEl.style.display = 'none';
         if (checkingEl) checkingEl.style.display = 'none';
-        if (progressEl) progressEl.style.display = 'block';
+        if (progressEl) progressEl.style.display = 'flex';
         if (installBtn) installBtn.style.display = 'none';
         if (notNowBtn) notNowBtn.style.display = 'none';
         if (cancelBtn) cancelBtn.style.display = status.showDone ? 'none' : 'inline-block';
         if (doneBtn) doneBtn.style.display = status.showDone ? 'inline-block' : 'none';
       }
-      if (typeof status.percent === 'number' && barEl) {
-        barEl.style.width = Math.max(0, Math.min(100, status.percent)) + '%';
+      if (typeof status.percent === 'number') {
+        const clamped = Math.max(0, Math.min(100, Math.round(status.percent)));
+        if (barEl) barEl.style.width = clamped + '%';
+        if (pctEl) pctEl.textContent = clamped + '%';
       }
       if (status.info && infoEl) infoEl.textContent = status.info;
       if (status.logAppend && logEl) {

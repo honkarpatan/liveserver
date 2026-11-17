@@ -114,13 +114,22 @@ function ensurePill() {
 /**
  * Toggle the green loading progress bar (both in-browser toolbar and global top bar).
  */
-export function setGreenLoader(active) {
+export function setGreenLoader(active, opts = {}) {
   injectStatusPillCss();
   const on = !!active;
-  document.body.classList.toggle('ls-green-loading', on);
+  const browserOpen = !!document.querySelector('#ls-browser-shell.is-open, .ls-browser-shell.is-open');
+  // Global top bar only when browser is open (or force:true for rare cases)
+  const allowGlobal = browserOpen || opts.force === true;
+
+  document.body.classList.toggle('ls-green-loading', on && allowGlobal);
   document.querySelectorAll('.ls-browser-shell').forEach((el) => {
     el.classList.toggle('is-installing', on);
   });
+
+  if (!allowGlobal) {
+    if (topBarEl) topBarEl.classList.remove('is-active');
+    return;
+  }
 
   if (!topBarEl || !topBarEl.isConnected) {
     topBarEl = document.createElement('div');
@@ -136,6 +145,12 @@ export function setGreenLoader(active) {
  * @param {{ spin?: boolean, autoHideMs?: number }} [opts]
  */
 export function showStatusPill(message, opts = {}) {
+  const browserOpen = !!document.querySelector('#ls-browser-shell.is-open, .ls-browser-shell.is-open');
+  // Hide status UI unless browser is open (or explicit force)
+  if (!browserOpen && opts.force !== true) {
+    hideStatusPill(0);
+    return;
+  }
   clearTimeout(hideTimer);
   const el = ensurePill();
   if (textEl) textEl.textContent = String(message || '');

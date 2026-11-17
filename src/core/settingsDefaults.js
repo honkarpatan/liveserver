@@ -13,7 +13,7 @@ export const defaultSettings = {
   // Browser
   browserDisplayMode: 'inPage', // inPage | editorTab
   browserSearchEngine: 'google', // google | duckduckgo | bing | brave
-  externalSiteMode: 'proxy', // proxy | acodeWebview | inApp | systemBrowser
+  externalSiteMode: 'proxy', // proxy | chromium | acodeWebview | inApp | systemBrowser
   browserHomeUrl: '', // empty = Green Fox Homepage
   showSideButton: true,
   browserOpacity: 1, // 0.1 - 1.0
@@ -35,6 +35,7 @@ export const defaultSettings = {
 
   // Deps
   dependenciesInstalled: false,
+  chromiumInstalled: false,
   acodelsPath: '',
 
   // UI

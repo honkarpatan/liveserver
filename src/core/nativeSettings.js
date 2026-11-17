@@ -18,6 +18,7 @@ export const ACTIONS = [
   ['root', 'Select root folder'],
   ['status', 'Show server status'],
   ['deps', 'Check dependencies'],
+  ['chromium', 'Install Chromium (for heavy sites)'],
   ['reinstall', 'Reinstall dependencies'],
 ];
 
@@ -106,9 +107,10 @@ export const SCHEMA = [
     key: 'externalSiteMode',
     category: 'Browser',
     text: 'External websites',
-    info: 'Local Node.js Reverse Proxy loads sites directly inside browser tabs',
+    info: 'Proxy auto-switches to Chromium if slow, or select Chromium directly',
     select: [
       ['proxy', 'Local Node.js Reverse Proxy (Default)'],
+      ['chromium', 'Headless Chromium (Always)'],
       ['acodeWebview', 'Acode Native WebView (Fullscreen)'],
       ['inApp', 'Direct iframe (without proxy)'],
       ['systemBrowser', 'Chrome / External system browser'],
@@ -118,8 +120,8 @@ export const SCHEMA = [
     key: 'browserHomeUrl',
     category: 'Browser',
     text: 'Home button URL',
-    info: 'Empty = Live Server root URL',
-    prompt: 'Home URL (leave empty for server root)',
+    info: 'Empty = Green Fox Homepage',
+    prompt: 'Home URL (leave empty for Green Fox Homepage)',
     promptType: 'text',
   },
   {
@@ -290,6 +292,10 @@ async function runAction(id) {
       const m = await import('../deps/dependencyChecker.js');
       return m.checkDependenciesAction();
     }
+    if (id === 'chromium') {
+      const m = await import('../ui/chromiumInstaller.js');
+      return m.showChromiumInstallerPopup({ startImmediately: false });
+    }
     if (id === 'reinstall') {
       const m = await import('../deps/dependencyChecker.js');
       return m.reinstallDependenciesAction();
@@ -343,6 +349,18 @@ export async function handleSettingChange(key, value) {
   }
 
   updateSetting(key, v);
+
+  if (key === 'externalSiteMode' && v === 'chromium') {
+    try {
+      const { isChromiumInstalled } = await import('../deps/dependencyChecker.js');
+      const installed = await isChromiumInstalled();
+      updateSetting('chromiumInstalled', installed);
+      if (!installed) {
+        const { showChromiumInstallerPopup } = await import('../ui/chromiumInstaller.js');
+        showChromiumInstallerPopup({ startImmediately: false });
+      }
+    } catch (_) {}
+  }
 
   if (key === 'showSideButton') {
     try {

@@ -1,20 +1,27 @@
 /**
- * Multi-tab state for the in-app browser with per-tab Back/Forward history stack
- * and automatic Local Node.js Reverse Proxy routing.
+ * Multi-tab state for the in-app browser with per-tab Back/Forward history stack,
+ * Local Node.js Reverse Proxy routing, and 10-second slow-load Chromium installer offer.
  */
 import { icon, I } from './icons.js';
 import { loadDevtoolCode } from './devtool.js';
 import { getSettings } from '../core/settings.js';
 import { ensureProxyServer } from '../server/process.js';
 import { getServerStatus } from '../server/status.js';
+import { isChromiumInstalled } from '../deps/dependencyChecker.js';
+import { showChromiumInstallerPopup, isChromiumInstallerOpen } from '../ui/chromiumInstaller.js';
+import { showStatusPill } from '../ui/statusPill.js';
 
 const toast = acode.require('toast');
+
+const SLOW_LOAD_TIMEOUT_MS = 10000;
 
 let tabs = [];
 let activeTabId = null;
 let nextId = 1;
 let listeners = [];
 let visited = [];
+let slowLoadTimer = null;
+let chromiumPromptDismissed = false;
 
 export function getTabs() {
   return tabs.slice();
@@ -71,7 +78,6 @@ export function isLocalUrl(url) {
   return /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|192\.168\.|10\.)/i.test(String(clean || ''));
 }
 
-/** Unwrap http://127.0.0.1:PORT/__proxy?url=... back into the clean original URL */
 export function toDisplayUrl(rawUrl) {
   const s = String(rawUrl || '').trim();
   if (!s) return 'about:blank';
@@ -107,7 +113,7 @@ export function normalizeUrl(raw) {
   return `https://www.google.com/search?q=${q}`;
 }
 
-async function resolveFrameSrc(displayUrl) {
+async function resolveFrameSrc(displayUrl, opts = {}) {
   if (!displayUrl || displayUrl === 'about:blank' || displayUrl.startsWith('blob:')) {
     return displayUrl || 'about:blank';
   }
@@ -115,15 +121,56 @@ async function resolveFrameSrc(displayUrl) {
     return displayUrl;
   }
 
-  const extMode = getSettings().externalSiteMode || 'proxy';
-  if (extMode === 'proxy') {
-    const st = getServerStatus();
-    const port = st.running && st.port ? st.port : await ensureProxyServer();
-    if (port) {
-      return `http://127.0.0.1:${port}/__proxy?url=${encodeURIComponent(displayUrl)}`;
-    }
+const extMode = getSettings().externalSiteMode || 'proxy';
+if (extMode === 'proxy' || extMode === 'chromium') {
+  const st = getServerStatus();
+  const port = st.running && st.port ? st.port : await ensureProxyServer();
+  if (port) {
+    const useChromium = extMode === 'chromium' || !!opts.useChromium;
+    const engineParam = useChromium ? '&engine=chromium' : '';
+    return `http://127.0.0.1:${port}/__proxy?url=${encodeURIComponent(displayUrl)}${engineParam}`;
   }
+}
+  
   return displayUrl;
+}
+
+function clearSlowLoadTimer() {
+  if (slowLoadTimer) {
+    clearTimeout(slowLoadTimer);
+    slowLoadTimer = null;
+  }
+}
+
+function armSlowLoadWatcher(tab, displayUrl, useChromium) {
+  clearSlowLoadTimer();
+  if (!tab || !displayUrl || displayUrl === 'about:blank' || isLocalUrl(displayUrl)) return;
+
+  slowLoadTimer = setTimeout(async () => {
+    if (!tab.loading || tab.id !== activeTabId) return;
+
+    const installed = getSettings().chromiumInstalled === true || (await isChromiumInstalled());
+
+    if (installed) {
+      if (!useChromium) {
+        showStatusPill('Switching slow page to Chromium renderer...', { spin: true, autoHideMs: 3500 });
+        loadUrlIntoTab(tab, displayUrl, { pushHistory: false, useChromium: true });
+      }
+      return;
+    }
+
+    if (chromiumPromptDismissed || isChromiumInstallerOpen()) return;
+
+    showChromiumInstallerPopup({
+      url: displayUrl,
+      onInstalled: () => {
+        loadUrlIntoTab(tab, displayUrl, { pushHistory: false, useChromium: true });
+      },
+      onDismiss: () => {
+        chromiumPromptDismissed = true;
+      },
+    });
+  }, SLOW_LOAD_TIMEOUT_MS);
 }
 
 export function sendToTab(tab, cmd, extra) {
@@ -183,6 +230,7 @@ function onBridgeMessage(ev) {
   tab.bridge = true;
 
   if (d.type === 'meta') {
+    clearSlowLoadTimer();
     tab.loading = false;
     if (d.href && d.href !== 'about:blank') {
       const cleanHref = toDisplayUrl(d.href);
@@ -216,11 +264,13 @@ export function initBridge() {
 }
 
 export function disposeBridge() {
+  clearSlowLoadTimer();
   window.removeEventListener('message', onBridgeMessage);
 }
 
 function applyFramePolicy(iframe, frameSrc) {
-  if (isLocalUrl(frameSrc) || frameSrc === 'about:blank' || frameSrc.startsWith('blob:')) {
+  const isProxied = String(frameSrc || '').includes('/__proxy?url=');
+  if (!isProxied && (isLocalUrl(frameSrc) || frameSrc === 'about:blank' || frameSrc.startsWith('blob:'))) {
     iframe.setAttribute(
       'sandbox',
       'allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads'
@@ -231,6 +281,12 @@ function applyFramePolicy(iframe, frameSrc) {
 }
 
 async function loadUrlIntoTab(tab, rawUrl, opts = {}) {
+  clearSlowLoadTimer();
+
+  const extMode = getSettings().externalSiteMode || 'proxy';
+tab.useChromium = extMode === 'chromium' || !!opts.useChromium;
+
+  
   const displayUrl = normalizeUrl(rawUrl);
   if (opts.pushHistory !== false) {
     pushTabHistory(tab, displayUrl);
@@ -238,6 +294,7 @@ async function loadUrlIntoTab(tab, rawUrl, opts = {}) {
 
   tab.url = displayUrl;
   tab.devtools = false;
+  tab.useChromium = !!opts.useChromium;
 
   if (displayUrl === 'about:blank') {
     tab.loading = false;
@@ -253,7 +310,10 @@ async function loadUrlIntoTab(tab, rawUrl, opts = {}) {
   if (!tab.pinTitle) tab.title = displayUrl.replace(/^https?:\/\//i, '');
   emit();
 
-  const frameSrc = await resolveFrameSrc(displayUrl);
+  // Start 10-second slow-load timer for external URLs
+  armSlowLoadWatcher(tab, displayUrl, tab.useChromium);
+
+  const frameSrc = await resolveFrameSrc(displayUrl, { useChromium: tab.useChromium });
   applyFramePolicy(tab.iframe, frameSrc);
   tab.iframe.src = frameSrc;
   remember(displayUrl, tab.title);
@@ -277,6 +337,7 @@ export function addTab(container, url, title) {
     favicon: null,
     zoom: 100,
     pinTitle: !!title,
+    useChromium: false,
     history: [initialDisplay],
     historyIndex: 0,
   };
@@ -289,6 +350,7 @@ export function addTab(container, url, title) {
   activeTabId = id;
 
   iframe.addEventListener('load', () => {
+    clearSlowLoadTimer();
     tab.loading = false;
     tab.devtools = false;
     const w = directWin(tab);
@@ -353,6 +415,7 @@ export function closeTab(id) {
   const idx = tabs.findIndex((t) => t.id === id);
   if (idx < 0) return tabs.length;
   const [t] = tabs.splice(idx, 1);
+  if (t.id === activeTabId) clearSlowLoadTimer();
   try {
     t.iframe?.remove();
   } catch (_) {}
@@ -371,6 +434,7 @@ export function closeTab(id) {
 }
 
 export function closeAllTabs() {
+  clearSlowLoadTimer();
   tabs.forEach((t) => {
     try {
       t.iframe?.remove();
@@ -381,10 +445,10 @@ export function closeAllTabs() {
   emit();
 }
 
-export function navigateActive(url) {
+export function navigateActive(url, opts = {}) {
   const t = getActiveTab();
   if (!t?.iframe) return;
-  loadUrlIntoTab(t, url, { pushHistory: true });
+  loadUrlIntoTab(t, url, { pushHistory: true, useChromium: !!opts.useChromium });
 }
 
 export function reloadActive() {
@@ -395,6 +459,7 @@ export function reloadActive() {
     return;
   }
   t.loading = true;
+  armSlowLoadWatcher(t, t.url, t.useChromium);
   const w = directWin(t);
   let done = false;
   if (w) {
@@ -410,6 +475,7 @@ export function reloadActive() {
 }
 
 export function stopActive() {
+  clearSlowLoadTimer();
   const t = getActiveTab();
   if (!t?.iframe) return;
   const w = directWin(t);

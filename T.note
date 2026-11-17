@@ -1,5 +1,0 @@
-[LiveServer:exec] catch →
-CANNOT LINK EXECUTABLE "/data/app/~~OoSi5-eClVKJ1AnKMTSQig==/com.foxdebug.acodefree-1PlT9mN8jON1-M2fMRfaBg==/lib/arm64/libproot-xed.so": library "libtalloc.so.2" not found: needed by main executable
-
-
-
