@@ -1,8 +1,5 @@
 /**
- * In-app browser — desktop Chrome look with Mozilla Firefox-inspired New Tab Page.
- * Hosts:  inPage    -> real Acode Page          (pageHost.js)
- *         editorTab -> Acode EditorFile, custom (editorTab.js)
- * Extras: custom dropdown menu, device mode, opacity + overlay preview, find, bookmarks, recent list.
+ * In-app browser — desktop Chrome look with Mozilla Firefox-inspired Green Fox Homepage.
  */
 import { getSettings, updateSetting } from '../core/settings.js';
 import { getActiveFile } from '../utils/paths.js';
@@ -33,6 +30,8 @@ import {
   onTabsChange,
   normalizeUrl,
   isLocalUrl,
+  canGoBack,
+  canGoForward,
 } from './tabManager.js';
 import { openBrowserMenu } from './menu.js';
 import { closeDropdown, isDropdownOpen } from './dropdown.js';
@@ -43,7 +42,6 @@ import { mountInPage } from './pageHost.js';
 import { mountInEditorTab } from './editorTab.js';
 import { openInAcodeWebview } from './nativeWebview.js';
 
-
 const toast = acode.require('toast');
 
 const FOX_LOGO_URL = 'https://i.postimg.cc/WpYPQ47b/green-fox.png';
@@ -53,7 +51,7 @@ const WATCHED_KEYS = ['browserOpacity', 'browserOverlay', 'overlayAutoSave', 'sh
 
 let shellEl = null;
 let host = null;
-let hostKind = 'page'; // 'page' | 'tab'
+let hostKind = 'page';
 let unsubTabs = null;
 let mounting = null;
 let closing = false;
@@ -181,7 +179,8 @@ function wireChrome(wrap) {
   const box = $('.ls-box');
   const device = $('.ls-device');
   const ntp = $('.ls-ntp');
-  const extBar = $('.ls-ext-bar');
+  const backBtn = $('.ls-back');
+  const fwdBtn = $('.ls-fwd');
   const urlInput = $('.ls-browser-url');
   const reloadBtn = $('.ls-reload');
   const starBtn = $('.ls-star');
@@ -208,11 +207,18 @@ function wireChrome(wrap) {
   const focused = () => wrap.getRootNode().activeElement === urlInput;
 
   const openTargetUrl = async (rawUrl) => {
+    if (rawUrl === 'about:blank') {
+      navigateActive('about:blank');
+      return;
+    }
     const target = normalizeUrl(rawUrl);
-    if (!target || target === 'about:blank') return;
+    if (!target || target === 'about:blank') {
+      navigateActive('about:blank');
+      return;
+    }
 
     if (!isLocalUrl(target)) {
-      const extMode = getSettings().externalSiteMode || 'acodeWebview';
+      const extMode = getSettings().externalSiteMode || 'proxy';
       if (extMode === 'acodeWebview') {
         await openInAcodeWebview(target);
         return;
@@ -223,6 +229,7 @@ function wireChrome(wrap) {
       }
     }
 
+    // Default ('proxy' for external sites, direct for local sites): loads right inside the browser tab
     navigateActive(target);
   };
 
@@ -247,7 +254,7 @@ function wireChrome(wrap) {
     brand.textContent = 'Live Server';
     hero.appendChild(brand);
 
-    // 2. Search Bar + Search Button below Logo
+    // 2. Search Bar + Search Button
     const searchWrap = document.createElement('div');
     searchWrap.className = 'ls-ntp-search';
 
@@ -257,7 +264,7 @@ function wireChrome(wrap) {
 
     const ntpInput = document.createElement('input');
     ntpInput.type = 'text';
-    ntpInput.placeholder = 'Search with Google or enter address';
+    ntpInput.placeholder = 'Search or enter web address';
     ntpInput.setAttribute('spellcheck', 'false');
     ntpInput.setAttribute('autocapitalize', 'off');
     ntpInput.setAttribute('autocomplete', 'off');
@@ -265,7 +272,6 @@ function wireChrome(wrap) {
     const searchBtn = document.createElement('button');
     searchBtn.type = 'button';
     searchBtn.className = 'ls-ntp-search-btn';
-    searchBtn.title = 'Search';
     searchBtn.textContent = 'Search';
 
     const triggerNtpSearch = () => {
@@ -284,7 +290,7 @@ function wireChrome(wrap) {
 
     searchWrap.append(searchIcon, ntpInput, searchBtn);
 
-    // 3. Round Chrome/Firefox-style Bookmark Circles
+    // 3. Round Bookmark Circles
     const tiles = document.createElement('div');
     tiles.className = 'ls-ntp-tiles';
 
@@ -334,7 +340,7 @@ function wireChrome(wrap) {
     addTile.innerHTML = `<span class="ls-ntp-dot">${icon(I.plus, 20)}</span><span class="ls-ntp-name">Add shortcut</span>`;
     addTile.addEventListener('click', async () => {
       const prompt = acode.require('prompt');
-      const rawUrl = await prompt('Bookmark URL (e.g. https://www.google.com)', 'https://', 'text');
+      const rawUrl = await prompt('Bookmark URL (e.g. https://duckduckgo.com)', 'https://', 'text');
       if (!rawUrl) return;
       const cleanUrl = normalizeUrl(rawUrl);
       const name = (await prompt('Shortcut name', cleanUrl.replace(/^https?:\/\//, ''), 'text')) || cleanUrl;
@@ -407,8 +413,13 @@ function wireChrome(wrap) {
     renderTabStrip(tabsEl);
     if (urlInput && !focused()) urlInput.value = t && t.url !== 'about:blank' ? t.url : '';
     wrap.classList.toggle('is-loading', !!t?.loading);
+    wrap.classList.toggle('is-installing', document.body.classList.contains('ls-green-loading'));
     reloadBtn.innerHTML = icon(t?.loading ? I.close : I.reload, 18);
     reloadBtn.title = t?.loading ? 'Stop loading' : 'Reload';
+
+    if (backBtn) backBtn.disabled = !canGoBack();
+    if (fwdBtn) fwdBtn.disabled = !canGoForward();
+
     const secure = /^https:/i.test(t?.url || '');
     siteBtn.innerHTML = icon(secure ? I.lock : I.info, 16);
     siteBtn.title = secure ? 'Connection is secure' : 'Not secure';
@@ -418,11 +429,6 @@ function wireChrome(wrap) {
     const blank = !t || t.url === 'about:blank';
     if (blank) renderNtp();
     ntp.classList.toggle('is-on', blank);
-
-    if (extBar) {
-      const isExt = !blank && /^https?:\/\//i.test(t.url) && !isLocalUrl(t.url);
-      extBar.hidden = !isExt;
-    }
 
     if (!getTabs().length) hideBrowser();
   };
@@ -439,6 +445,16 @@ function wireChrome(wrap) {
     showAllRecent = false;
     addTab(device, 'about:blank');
     activateTab(getActiveTab()?.id);
+  };
+
+  const goHome = () => {
+    showAllRecent = false;
+    const customHome = String(getSettings().browserHomeUrl || '').trim();
+    if (customHome) {
+      openTargetUrl(customHome);
+    } else {
+      navigateActive('about:blank');
+    }
   };
 
   const nextZoom = (cur, dir) => {
@@ -521,7 +537,7 @@ function wireChrome(wrap) {
       const t = getActiveTab();
       if (!t || t.url === 'about:blank') return toast('Open a page first', 1800);
       if (!toggleDevtoolsActive())
-        toast('DevTools work on pages served by Live Server (restart the server once to update it)', 3500);
+        toast('DevTools work on pages served by Live Server', 3000);
     },
     isDeviceMode: () => deviceMode.isOn(),
     toggleDeviceMode: () => deviceMode.toggle(),
@@ -529,7 +545,8 @@ function wireChrome(wrap) {
       const t = getActiveTab();
       if (!t || !/^https?:/i.test(t.url)) return toast('No page source here', 1800);
       try {
-        const txt = await (await fetch(t.url)).text();
+        const fetchUrl = t.iframe?.src && t.iframe.src !== 'about:blank' ? t.iframe.src : t.url;
+        const txt = await (await fetch(fetchUrl)).text();
         const blobUrl = URL.createObjectURL(new Blob([txt], { type: 'text/plain;charset=utf-8' }));
         addTab(device, blobUrl, 'view-source:' + t.url.replace(/^https?:\/\//, ''));
       } catch (e) {
@@ -551,19 +568,10 @@ function wireChrome(wrap) {
   $('.ls-tab-new')?.addEventListener('click', newTab);
   wrap.querySelectorAll('.ls-close-btn, .ls-ov-close').forEach((b) => b.addEventListener('click', () => hideBrowser()));
   $('.ls-fs-btn')?.addEventListener('click', toggleFs);
-  $('.ls-back')?.addEventListener('click', () => historyActive(-1));
-  $('.ls-fwd')?.addEventListener('click', () => historyActive(1));
+  backBtn?.addEventListener('click', () => historyActive(-1));
+  fwdBtn?.addEventListener('click', () => historyActive(1));
   reloadBtn.addEventListener('click', () => (getActiveTab()?.loading ? stopActive() : reloadActive()));
-  $('.ls-home')?.addEventListener('click', async () => {
-    const customHome = String(getSettings().browserHomeUrl || '').trim();
-    if (customHome) {
-      openTargetUrl(customHome);
-      return;
-    }
-    const u = await serverRootUrl();
-    if (u) navigateActive(u);
-    else toast('Server not running', 2000);
-  });
+  $('.ls-home')?.addEventListener('click', goHome);
   starBtn.addEventListener('click', toggleBookmark);
   opBtn.addEventListener('click', openOpacity);
   devBtn.addEventListener('click', () => {
@@ -572,10 +580,6 @@ function wireChrome(wrap) {
   });
   devBtn.classList.toggle('is-on', deviceMode.isOn());
   menuBtn.addEventListener('click', () => openBrowserMenu(menuApi(), { host: wrap, anchor: menuBtn }));
-  $('.ls-ext-open')?.addEventListener('click', () => {
-    const u = getActiveTab()?.url;
-    if (u && u !== 'about:blank') openInAcodeWebview(u);
-  });
 
   urlInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -614,8 +618,8 @@ function createChrome() {
         </div>
       </div>
       <div class="ls-toolbar">
-        <button type="button" class="ls-ib ls-back" title="Back">${icon(I.back, 18)}</button>
-        <button type="button" class="ls-ib ls-fwd" title="Forward">${icon(I.forward, 18)}</button>
+        <button type="button" class="ls-ib ls-back" title="Back" disabled>${icon(I.back, 18)}</button>
+        <button type="button" class="ls-ib ls-fwd" title="Forward" disabled>${icon(I.forward, 18)}</button>
         <button type="button" class="ls-ib ls-reload" title="Reload">${icon(I.reload, 18)}</button>
         <button type="button" class="ls-ib ls-home" title="Home">${icon(I.home, 18)}</button>
         <div class="ls-omni">
@@ -628,12 +632,9 @@ function createChrome() {
         <button type="button" class="ls-ib ls-menu-btn" title="Customize and control">${icon(I.dots, 18, 3)}</button>
         <button type="button" class="ls-ib ls-ov-close" title="Close">${icon(I.close, 16)}</button>
         <div class="ls-progress"></div>
+        <div class="ls-green-progress"></div>
       </div>
       <div class="ls-devbar" hidden></div>
-      <div class="ls-ext-bar" hidden>
-        <span>External site — if blocked inside frame, open externally</span>
-        <button type="button" class="ls-ext-open">Open in Browser ↗</button>
-      </div>
     </div>
     <div class="ls-stage">
       <div class="ls-ntp"></div>
@@ -649,7 +650,6 @@ function createChrome() {
   return wireChrome(wrap);
 }
 
-/** Hardware back: dismiss menu / find bar / fullscreen first, then let the page close. */
 function handleBack() {
   if (isDropdownOpen()) {
     closeDropdown();
@@ -667,7 +667,6 @@ function handleBack() {
   return false;
 }
 
-/** The host (page / tab) was closed from outside (back button, tab close) */
 function onHostClosed() {
   if (closing) return;
   hideBrowser({ fromHost: true });
@@ -707,15 +706,10 @@ async function mountShell() {
   return mounting;
 }
 
-/**
- * @param {string} [url]
- * @param {{reuse?: boolean, restoreOnly?: boolean, forceReload?: boolean}} [opts]
- */
 export async function openBrowser(url, opts = {}) {
   const shell = await mountShell();
   const tabsNow = getTabs();
 
-  // If tabs are already open and restoreOnly is set (or no URL passed), keep all tabs & state untouched
   if (tabsNow.length > 0 && (opts.restoreOnly || !url)) {
     return;
   }

@@ -1,9 +1,12 @@
 /**
- * Multi-tab state for the in-app browser (Chrome-style tabs)
+ * Multi-tab state for the in-app browser with per-tab Back/Forward history stack
+ * and automatic Local Node.js Reverse Proxy routing.
  */
 import { icon, I } from './icons.js';
 import { loadDevtoolCode } from './devtool.js';
 import { getSettings } from '../core/settings.js';
+import { ensureProxyServer } from '../server/process.js';
+import { getServerStatus } from '../server/status.js';
 
 const toast = acode.require('toast');
 
@@ -11,7 +14,7 @@ let tabs = [];
 let activeTabId = null;
 let nextId = 1;
 let listeners = [];
-let visited = []; // [{url,title,ts}] newest first (session history)
+let visited = [];
 
 export function getTabs() {
   return tabs.slice();
@@ -30,6 +33,16 @@ export function clearVisited() {
   emit();
 }
 
+export function canGoBack() {
+  const t = getActiveTab();
+  return !!(t && t.historyIndex > 0);
+}
+
+export function canGoForward() {
+  const t = getActiveTab();
+  return !!(t && t.historyIndex < t.history.length - 1);
+}
+
 export function onTabsChange(fn) {
   listeners.push(fn);
   return () => {
@@ -46,38 +59,71 @@ function emit() {
 }
 
 function remember(url, title) {
-  if (!url || url === 'about:blank' || url.startsWith('blob:')) return;
-  visited = visited.filter((v) => v.url !== url);
-  visited.unshift({ url, title: title || url.replace(/^https?:\/\//i, ''), ts: Date.now() });
+  const clean = toDisplayUrl(url);
+  if (!clean || clean === 'about:blank' || clean.startsWith('blob:')) return;
+  visited = visited.filter((v) => v.url !== clean);
+  visited.unshift({ url: clean, title: title || clean.replace(/^https?:\/\//i, ''), ts: Date.now() });
   if (visited.length > 50) visited.length = 50;
 }
 
 export function isLocalUrl(url) {
-  return /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|192\.168\.|10\.)/i.test(String(url || ''));
+  const clean = toDisplayUrl(url);
+  return /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|192\.168\.|10\.)/i.test(String(clean || ''));
+}
+
+/** Unwrap http://127.0.0.1:PORT/__proxy?url=... back into the clean original URL */
+export function toDisplayUrl(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return 'about:blank';
+  const marker = '/__proxy?url=';
+  const idx = s.indexOf(marker);
+  if (idx !== -1) {
+    try {
+      const encoded = s.slice(idx + marker.length).split('&')[0];
+      return decodeURIComponent(encoded);
+    } catch (_) {}
+  }
+  return s;
 }
 
 export function normalizeUrl(raw) {
-  let u = String(raw || '').trim();
-  if (!u) return 'about:blank';
+  let u = toDisplayUrl(raw);
+  if (!u || u === 'about:blank') return 'about:blank';
   if (/^(about:|blob:|data:|https?:\/\/)/i.test(u)) return u;
 
-  // localhost or IP address (e.g. 127.0.0.1:8080, localhost:3000)
   if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/.*)?$/i.test(u)) {
     return 'http://' + u;
   }
 
-  // Domain-like input without spaces (e.g. google.com, github.com/user)
   if (!/\s/.test(u) && /^[a-z0-9-]+(\.[a-z0-9-]+)+([/?#].*)?$/i.test(u)) {
     return 'https://' + u;
   }
 
-  // Otherwise treat as search query (e.g. "google", "css grid")
   const engine = getSettings().browserSearchEngine || 'google';
   const q = encodeURIComponent(u);
   if (engine === 'duckduckgo') return `https://duckduckgo.com/?q=${q}`;
   if (engine === 'bing') return `https://www.bing.com/search?q=${q}`;
   if (engine === 'brave') return `https://search.brave.com/search?q=${q}`;
   return `https://www.google.com/search?q=${q}`;
+}
+
+async function resolveFrameSrc(displayUrl) {
+  if (!displayUrl || displayUrl === 'about:blank' || displayUrl.startsWith('blob:')) {
+    return displayUrl || 'about:blank';
+  }
+  if (isLocalUrl(displayUrl)) {
+    return displayUrl;
+  }
+
+  const extMode = getSettings().externalSiteMode || 'proxy';
+  if (extMode === 'proxy') {
+    const st = getServerStatus();
+    const port = st.running && st.port ? st.port : await ensureProxyServer();
+    if (port) {
+      return `http://127.0.0.1:${port}/__proxy?url=${encodeURIComponent(displayUrl)}`;
+    }
+  }
+  return displayUrl;
 }
 
 export function sendToTab(tab, cmd, extra) {
@@ -120,6 +166,15 @@ function findTab(source) {
   });
 }
 
+function pushTabHistory(tab, displayUrl) {
+  if (!tab || !displayUrl) return;
+  const currentEntry = tab.history[tab.historyIndex];
+  if (currentEntry === displayUrl) return;
+  tab.history = tab.history.slice(0, tab.historyIndex + 1);
+  tab.history.push(displayUrl);
+  tab.historyIndex = tab.history.length - 1;
+}
+
 function onBridgeMessage(ev) {
   const d = ev.data;
   if (!d || d.ls !== 1) return;
@@ -129,8 +184,16 @@ function onBridgeMessage(ev) {
 
   if (d.type === 'meta') {
     tab.loading = false;
-    if (d.href && d.href !== 'about:blank') tab.url = d.href;
-    if (!tab.pinTitle) tab.title = String(d.title || tab.url.replace(/^https?:\/\//, '')).slice(0, 60);
+    if (d.href && d.href !== 'about:blank') {
+      const cleanHref = toDisplayUrl(d.href);
+      if (cleanHref !== tab.url) {
+        tab.url = cleanHref;
+        pushTabHistory(tab, cleanHref);
+      }
+    }
+    if (!tab.pinTitle) {
+      tab.title = String(d.title || tab.url.replace(/^https?:\/\//, '')).slice(0, 60);
+    }
     if (d.favicon) tab.favicon = d.favicon;
     if ((tab.zoom || 100) !== 100) sendToTab(tab, 'zoom', { pct: tab.zoom });
     remember(tab.url, tab.title);
@@ -156,9 +219,8 @@ export function disposeBridge() {
   window.removeEventListener('message', onBridgeMessage);
 }
 
-function applyFramePolicy(iframe, url) {
-  // Apply sandbox only for local Live Server pages; external sites like Google break under sandbox
-  if (isLocalUrl(url) || url === 'about:blank' || url.startsWith('blob:')) {
+function applyFramePolicy(iframe, frameSrc) {
+  if (isLocalUrl(frameSrc) || frameSrc === 'about:blank' || frameSrc.startsWith('blob:')) {
     iframe.setAttribute(
       'sandbox',
       'allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads'
@@ -168,36 +230,63 @@ function applyFramePolicy(iframe, url) {
   }
 }
 
+async function loadUrlIntoTab(tab, rawUrl, opts = {}) {
+  const displayUrl = normalizeUrl(rawUrl);
+  if (opts.pushHistory !== false) {
+    pushTabHistory(tab, displayUrl);
+  }
+
+  tab.url = displayUrl;
+  tab.devtools = false;
+
+  if (displayUrl === 'about:blank') {
+    tab.loading = false;
+    tab.title = 'New tab';
+    tab.favicon = null;
+    applyFramePolicy(tab.iframe, 'about:blank');
+    tab.iframe.src = 'about:blank';
+    emit();
+    return;
+  }
+
+  tab.loading = true;
+  if (!tab.pinTitle) tab.title = displayUrl.replace(/^https?:\/\//i, '');
+  emit();
+
+  const frameSrc = await resolveFrameSrc(displayUrl);
+  applyFramePolicy(tab.iframe, frameSrc);
+  tab.iframe.src = frameSrc;
+  remember(displayUrl, tab.title);
+  emit();
+}
+
 export function addTab(container, url, title) {
   const id = nextId++;
   const iframe = document.createElement('iframe');
   iframe.className = 'ls-browser-frame';
-  iframe.setAttribute('allow', 'fullscreen; clipboard-read; clipboard-write; geolocation; camera; microphone');
+  iframe.setAttribute('allow', 'fullscreen; clipboard-read; clipboard-write');
 
-  const startUrl = url ? normalizeUrl(url) : 'about:blank';
-  applyFramePolicy(iframe, startUrl);
-  iframe.src = startUrl;
-  container.appendChild(iframe);
+  const initialDisplay = url ? normalizeUrl(url) : 'about:blank';
 
   const tab = {
     id,
-    url: startUrl,
-    title: title || (startUrl === 'about:blank' ? 'New tab' : startUrl.replace(/^https?:\/\//i, '')),
+    url: initialDisplay,
+    title: title || (initialDisplay === 'about:blank' ? 'New tab' : initialDisplay.replace(/^https?:\/\//i, '')),
     iframe,
-    loading: startUrl !== 'about:blank',
+    loading: initialDisplay !== 'about:blank',
     favicon: null,
     zoom: 100,
     pinTitle: !!title,
+    history: [initialDisplay],
+    historyIndex: 0,
   };
+
+  container.appendChild(iframe);
   tabs.push(tab);
   tabs.forEach((t) => {
     if (t.iframe) t.iframe.style.display = t.id === id ? 'block' : 'none';
   });
   activeTabId = id;
-
-  if (startUrl !== 'about:blank') {
-    remember(startUrl, tab.title);
-  }
 
   iframe.addEventListener('load', () => {
     tab.loading = false;
@@ -205,8 +294,14 @@ export function addTab(container, url, title) {
     const w = directWin(tab);
     if (w) {
       try {
-        const loc = w.location.href;
-        if (loc && loc !== 'about:blank') tab.url = loc;
+        const winTarget = w.__LS_PROXY_TARGET__;
+        const loc = winTarget || toDisplayUrl(w.location.href);
+        if (loc && loc !== 'about:blank') {
+          if (loc !== tab.url) {
+            tab.url = loc;
+            pushTabHistory(tab, loc);
+          }
+        }
         if (!tab.pinTitle) {
           if (w.document.title) tab.title = w.document.title.slice(0, 60);
           else if (tab.url !== 'about:blank') tab.title = tab.url.replace(/^https?:\/\//, '');
@@ -214,9 +309,10 @@ export function addTab(container, url, title) {
         const link = w.document.querySelector('link[rel~="icon"]');
         if (link?.href) tab.favicon = link.href;
       } catch (_) {}
-    } else if (!tab.pinTitle && tab.url !== 'about:blank' && (!tab.title || tab.title === startUrl)) {
+    } else if (!tab.pinTitle && tab.url !== 'about:blank') {
       tab.title = tab.url.replace(/^https?:\/\//, '');
     }
+
     if (!tab.favicon && /^https?:/i.test(tab.url)) {
       try {
         tab.favicon = new URL('/favicon.ico', tab.url).href;
@@ -227,7 +323,14 @@ export function addTab(container, url, title) {
     emit();
   });
 
-  emit();
+  if (initialDisplay === 'about:blank') {
+    applyFramePolicy(iframe, 'about:blank');
+    iframe.src = 'about:blank';
+    emit();
+  } else {
+    loadUrlIntoTab(tab, initialDisplay, { pushHistory: false });
+  }
+
   return tab;
 }
 
@@ -281,19 +384,16 @@ export function closeAllTabs() {
 export function navigateActive(url) {
   const t = getActiveTab();
   if (!t?.iframe) return;
-  const u = normalizeUrl(url);
-  t.url = u;
-  t.loading = u !== 'about:blank';
-  t.title = u === 'about:blank' ? 'New tab' : u.replace(/^https?:\/\//i, '');
-  applyFramePolicy(t.iframe, u);
-  t.iframe.src = u;
-  if (u !== 'about:blank') remember(u, t.title);
-  emit();
+  loadUrlIntoTab(t, url, { pushHistory: true });
 }
 
 export function reloadActive() {
   const t = getActiveTab();
   if (!t?.iframe) return;
+  if (t.url === 'about:blank') {
+    emit();
+    return;
+  }
   t.loading = true;
   const w = directWin(t);
   let done = false;
@@ -303,7 +403,9 @@ export function reloadActive() {
       done = true;
     } catch (_) {}
   }
-  if (!done && !(t.bridge && sendToTab(t, 'reload'))) t.iframe.src = t.url || t.iframe.src;
+  if (!done && !(t.bridge && sendToTab(t, 'reload'))) {
+    t.iframe.src = t.iframe.src;
+  }
   emit();
 }
 
@@ -323,14 +425,20 @@ export function stopActive() {
 export function historyActive(dir) {
   const t = getActiveTab();
   if (!t) return;
-  const w = directWin(t);
-  if (w) {
-    try {
-      dir < 0 ? w.history.back() : w.history.forward();
-      return;
-    } catch (_) {}
+
+  if (dir < 0 && t.historyIndex > 0) {
+    t.historyIndex -= 1;
+    const prevUrl = t.history[t.historyIndex];
+    loadUrlIntoTab(t, prevUrl, { pushHistory: false });
+    return;
   }
-  sendToTab(t, 'history', { dir });
+
+  if (dir > 0 && t.historyIndex < t.history.length - 1) {
+    t.historyIndex += 1;
+    const nextUrl = t.history[t.historyIndex];
+    loadUrlIntoTab(t, nextUrl, { pushHistory: false });
+    return;
+  }
 }
 
 export function findInActive(q, back) {

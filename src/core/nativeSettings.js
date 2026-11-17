@@ -103,16 +103,17 @@ export const SCHEMA = [
     ],
   },
   {
-  key: 'externalSiteMode',
-  category: 'Browser',
-  text: 'External websites',
-  info: 'Acode WebView bypasses Google/site iframe blocks',
-  select: [
-    ['acodeWebview', 'Acode Native WebView (Recommended)'],
-    ['inApp', 'In-app frame (local/embeddable sites)'],
-    ['systemBrowser', 'Chrome / External system browser'],
-  ],
-},
+    key: 'externalSiteMode',
+    category: 'Browser',
+    text: 'External websites',
+    info: 'Local Node.js Reverse Proxy loads sites directly inside browser tabs',
+    select: [
+      ['proxy', 'Local Node.js Reverse Proxy (Default)'],
+      ['acodeWebview', 'Acode Native WebView (Fullscreen)'],
+      ['inApp', 'Direct iframe (without proxy)'],
+      ['systemBrowser', 'Chrome / External system browser'],
+    ],
+  },
   {
     key: 'browserHomeUrl',
     category: 'Browser',

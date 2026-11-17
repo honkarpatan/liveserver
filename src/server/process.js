@@ -1,5 +1,6 @@
 /**
  * Start / stop Node acodels backend without opening a terminal UI.
+ * Automatically upgrades/restarts older backend instances lacking /__proxy support.
  */
 import { getSettings, updateSetting } from '../core/settings.js';
 import { silentExec, wrapSh, getExecutor } from '../utils/alpineExec.js';
@@ -9,32 +10,37 @@ import { getEffectiveRoot } from './rootFolder.js';
 import { getConfiguredPort, buildServerUrl } from './port.js';
 import { getServerStatus, setServerStatus, refreshStatusFromBackend } from './status.js';
 import { getActiveFile, uriToFsPath } from '../utils/paths.js';
+import { showStatusPill, hideStatusPill, setGreenLoader } from '../ui/statusPill.js';
 
 const toast = acode.require('toast');
 let baseUrlRef = '';
 let inactivityTimer = null;
-
-/** token of the currently running foreground node call (null = none) */
 let serverProc = null;
 
 export function setProcessBaseUrl(url) {
   baseUrlRef = url || '';
 }
 
-/** Fast check via WebView fetch */
-async function fetchAlive(port, timeoutMs = 800) {
+/** Check if server is alive AND whether it includes the /__proxy route */
+async function checkServerCapabilities(port, timeoutMs = 900) {
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), timeoutMs);
     const res = await fetch('http://127.0.0.1:' + port + '/check', { signal: ctrl.signal });
     clearTimeout(to);
-    return !!(res && res.ok);
+    if (!res || !res.ok) return { alive: false, proxy: false };
+    const data = await res.json().catch(() => ({}));
+    return { alive: true, proxy: data?.proxy === true };
   } catch (_) {
-    return false;
+    return { alive: false, proxy: false };
   }
 }
 
-/** Slow check via wget/curl inside Alpine (spawns proot — use sparingly) */
+async function fetchAlive(port, timeoutMs = 800) {
+  const cap = await checkServerCapabilities(port, timeoutMs);
+  return cap.alive;
+}
+
 async function shellAlive(port) {
   try {
     const out = await silentExec(
@@ -58,7 +64,25 @@ async function isPortAlive(port, opts = {}) {
   return false;
 }
 
-/** Synchronous path mapping when server is already running (avoids proot delay) */
+/** BusyBox / Alpine / Termux compatible process killer */
+async function killNodeOnPort(port) {
+  const p = String(parseInt(port, 10) || 8080);
+  serverProc = null;
+  const cmd =
+    `for pid in $(ps -o pid,args 2>/dev/null | grep "node index.js ${p}" | grep -v grep | awk '{print $1}'); do kill -9 "$pid" 2>/dev/null; done; ` +
+    `for pid in $(ps 2>/dev/null | grep "node index.js ${p}" | grep -v grep | awk '{print $1}'); do kill -9 "$pid" 2>/dev/null; done; ` +
+    `pkill -9 -f "node index.js ${p}" 2>/dev/null || true; ` +
+    `fuser -k ${p}/tcp 2>/dev/null || true`;
+  try {
+    await silentExec(cmd, { timeoutMs: 12000 });
+  } catch (_) {}
+
+  for (let i = 0; i < 10; i++) {
+    if (!(await fetchAlive(p, 400))) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
 function mapRootFast(root) {
   const r = String(root || '').replace(/\/+$/, '') || '/';
   const m = r.match(/^\/storage\/emulated\/0(\/.*)?$/);
@@ -66,9 +90,6 @@ function mapRootFast(root) {
   return r;
 }
 
-/**
- * Make sure the root folder is visible from inside Alpine (proot).
- */
 async function resolveAlpineRoot(root) {
   const r = String(root || '').replace(/\/+$/, '') || '/';
   const cands = [r];
@@ -117,7 +138,6 @@ function activeHtmlName() {
   return 'index.html';
 }
 
-/** Relative path of active file under root, for browser open */
 function relativeFileUnderRoot(root) {
   try {
     const f = getActiveFile();
@@ -268,13 +288,105 @@ function launchNodeForeground(port, acodelsPath) {
     });
 }
 
+/**
+ * Ensures the Node backend with /__proxy support is running and returns its active port.
+ */
+export async function ensureProxyServer() {
+  const port = getConfiguredPort();
+  const cap = await checkServerCapabilities(port);
+
+  // Ready and supports /__proxy
+  if (cap.alive && cap.proxy) return port;
+
+  const depsOk = await ensureLiveServerDeps({ baseUrl: baseUrlRef });
+  if (!depsOk) return null;
+
+  setGreenLoader(true);
+  showStatusPill(
+    cap.alive
+      ? `$ Updating backend on :${port} with Reverse Proxy...`
+      : `$ node index.js ${port} (starting local proxy)...`,
+    { spin: true }
+  );
+
+  try {
+    if (cap.alive && !cap.proxy) {
+      await killNodeOnPort(port);
+    }
+
+    const acodels = await resolveAcodelsPath(baseUrlRef);
+    await ensureFullAcodelsIndex(acodels);
+    launchNodeForeground(port, acodels);
+
+    let up = false;
+    for (let i = 0; i < 35; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      const nextCap = await checkServerCapabilities(port, 500);
+      if (nextCap.alive && nextCap.proxy) {
+        up = true;
+        break;
+      }
+      if (!serverProc) break;
+    }
+
+    if (!up) {
+      showStatusPill('Proxy server failed to start', { spin: false, autoHideMs: 3000 });
+      return null;
+    }
+
+    const st = getServerStatus();
+    const root = st.root || getEffectiveRoot() || '/sdcard';
+    const aroot = mapRootFast(root);
+    const fileName = st.fileName || 'index.html';
+    await patchSetup(port, aroot, fileName);
+
+    const urlBase = buildServerUrl(port, '127.0.0.1');
+    setServerStatus({
+      running: true,
+      port,
+      root: aroot,
+      url: urlBase,
+      fileName,
+      bind: '0.0.0.0',
+      startedAt: Date.now(),
+      lastError: null,
+    });
+    armInactivityTimer();
+    try {
+      window.dispatchEvent(
+        new CustomEvent('liveserver-started', { detail: { url: urlBase, port, root: aroot, fileName } })
+      );
+    } catch (_) {}
+
+    showStatusPill(`✓ Reverse proxy ready on 127.0.0.1:${port}`, { spin: false, autoHideMs: 2000 });
+    return port;
+  } catch (e) {
+    showStatusPill(`Proxy error: ${e?.message || e}`, { spin: false, autoHideMs: 3500 });
+    return null;
+  } finally {
+    setGreenLoader(false);
+  }
+}
+
 export async function startServer(opts = {}) {
   const port = opts.port || getConfiguredPort();
   const root = opts.root || getEffectiveRoot();
   const s = getSettings();
 
-  // FAST PATH: server is already running -> skip proot deps/root checks and open immediately
-  if (!opts.forceDeps && (await fetchAlive(port))) {
+  const cap = !opts.forceDeps ? await checkServerCapabilities(port) : { alive: false, proxy: false };
+
+  // If an outdated server without /__proxy is running, kill it so we boot the updated index.js
+  if (cap.alive && !cap.proxy) {
+    setGreenLoader(true);
+    showStatusPill(`$ Upgrading Live Server on :${port}...`, { spin: true });
+    await killNodeOnPort(port);
+    setGreenLoader(false);
+    hideStatusPill(0);
+    cap.alive = false;
+  }
+
+  // FAST PATH: updated server is already running
+  if (cap.alive && cap.proxy) {
     const st = getServerStatus();
     const effectiveRoot = root || st.root;
     if (!effectiveRoot) {
@@ -330,7 +442,6 @@ export async function startServer(opts = {}) {
   // COLD START PATH
   const depsOk = await ensureLiveServerDeps({ baseUrl: baseUrlRef, force: !!opts.forceDeps });
   if (!depsOk) {
-    toast('Dependencies required', 2000);
     return false;
   }
 
@@ -349,16 +460,20 @@ export async function startServer(opts = {}) {
 
   const nodeBind = '0.0.0.0';
   if (!(await isPortAlive(port, { deep: true }))) {
+    setGreenLoader(true);
+    showStatusPill(`$ node index.js ${port} 0.0.0.0`, { spin: true });
+
     const acodels = await resolveAcodelsPath(baseUrlRef);
     try {
       await ensureFullAcodelsIndex(acodels);
     } catch (e) {
       console.warn('[LiveServer] ensure index', e);
     }
-    toast('Starting server...', 1200);
     try {
       launchNodeForeground(port, acodels);
     } catch (e) {
+      setGreenLoader(false);
+      hideStatusPill(0);
       setServerStatus({ running: false, lastError: String(e?.message || e) });
       toast('Start failed: ' + (e?.message || e), 3000);
       return false;
@@ -374,7 +489,10 @@ export async function startServer(opts = {}) {
       if (!serverProc) break;
     }
     if (!up && serverProc) up = await isPortAlive(port, { deep: true });
+    setGreenLoader(false);
+
     if (!up) {
+      showStatusPill('Server failed to start', { spin: false, autoHideMs: 3500 });
       try {
         const log = await silentExec(
           'tail -n 40 /root/.acode_liveserver/acodels/liveserver.log 2>/dev/null',
@@ -387,6 +505,7 @@ export async function startServer(opts = {}) {
       serverProc = null;
       return false;
     }
+    showStatusPill(`✓ Live Server running on :${port}`, { spin: false, autoHideMs: 2200 });
   }
 
   const configured = await patchSetup(port, aroot, fileName);
@@ -435,17 +554,8 @@ export async function stopServer() {
   clearInactivityTimer();
   const st = getServerStatus();
   const port = st.port || getConfiguredPort();
-  serverProc = null;
-  try {
-    await silentExec(
-      '(pkill -f "node index.js ' + port + '" 2>/dev/null; fuser -k ' + port + '/tcp 2>/dev/null; true)',
-      { timeoutMs: 15000 }
-    );
-  } catch (_) {}
-  for (let i = 0; i < 8; i++) {
-    if (!(await isPortAlive(port))) break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
+  await killNodeOnPort(port);
+
   setServerStatus({
     running: false,
     port: null,
@@ -465,7 +575,7 @@ export async function restartServer() {
   const root = st.root;
   const fileName = st.fileName;
   await stopServer();
-  await new Promise((r) => setTimeout(r, 450));
+  await new Promise((r) => setTimeout(r, 350));
   return startServer({ root: root || undefined, fileName: fileName || undefined });
 }
 

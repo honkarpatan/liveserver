@@ -13,13 +13,12 @@ export const defaultSettings = {
   // Browser
   browserDisplayMode: 'inPage', // inPage | editorTab
   browserSearchEngine: 'google', // google | duckduckgo | bing | brave
-  // externalSiteMode: 'inApp', // inApp | systemBrowser
-  externalSiteMode: 'acodeWebview', // acodeWebview | inApp | systemBrowser
-  browserHomeUrl: '', // empty = Live Server root URL
+  externalSiteMode: 'proxy', // proxy | acodeWebview | inApp | systemBrowser
+  browserHomeUrl: '', // empty = Green Fox Homepage
   showSideButton: true,
   browserOpacity: 1, // 0.1 - 1.0
-  browserOverlay: false, // preview as overlay: page is see-through and the editor underneath stays usable
-  overlayAutoSave: true, // overlay only: save the file shortly after typing so the preview updates live
+  browserOverlay: false,
+  overlayAutoSave: true,
   browserBookmarks: [],
   browserDevice: { on: false, id: 'responsive', w: 390, h: 844, zoom: 'fit' },
 
@@ -36,7 +35,7 @@ export const defaultSettings = {
 
   // Deps
   dependenciesInstalled: false,
-  acodelsPath: '', // auto: plugin dir/acodels
+  acodelsPath: '',
 
   // UI
   showAddressBar: true,

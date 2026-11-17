@@ -264,6 +264,38 @@ export const BROWSER_CSS = `
 .ls-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 3px; background: var(--ls-text); transition: transform .15s; }
 .ls-switch.is-on::before { background: var(--ls-accent); }
 .ls-switch.is-on::after { transform: translateX(16px); background: #fff; }
+
+ #ls-deps-picker{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center}
+.ls-dp-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+.ls-dp-card{position:relative;width:min(420px,92vw);max-height:min(72vh,540px);display:flex;flex-direction:column;border-radius:3px;background:var(--secondary-color,#1e1e1e);color:var(--color,#e0e0e0);overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+.ls-dp-header{padding:12px 14px 8px;border-bottom:1px solid rgba(128,128,128,.25)}
+.ls-dp-title{font-weight:600}
+.ls-dp-subtitle{font-size:.75rem;opacity:.75;margin-top:4px}
+.ls-dp-body{flex:1;overflow:auto;padding:8px 12px}
+.ls-dp-row{display:flex;align-items:center;gap:10px;padding:8px 6px;border-radius:3px;margin-bottom:4px;background:rgba(128,128,128,.08)}
+.ls-dp-status.ok{color:#66bb6a}.ls-dp-status.miss{color:#f48771}
+.ls-dp-footer{display:flex;gap:8px;justify-content:flex-end;padding:10px 12px;border-top:1px solid rgba(128,128,128,.25)}
+.ls-dp-btn{border:none;border-radius:3px;padding:8px 12px;background:rgba(128,128,128,.2);color:inherit}
+.ls-dp-btn.ls-dp-install{background:var(--active-color,#61afef);color:#111;font-weight:600}
+.ls-dp-progress-track{height:3px;border-radius:3px;background:rgba(128,128,128,.25);overflow:hidden}
+.ls-dp-progress-bar{height:100%;background:var(--active-color,#61afef);transition:width .25s}
+.ls-dp-spinner{width:16px;height:16px;border-radius:50%;border:2px solid rgba(128,128,128,.35);border-top-color:var(--active-color,#61afef);animation:ls-spin .7s linear infinite}
+@keyframes ls-spin{to{transform:rotate(360deg)}}
+
+
+
+.ls-progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; display: none; }
+.ls-browser-shell.is-loading .ls-progress { display: block; }
+.ls-progress::before { content: ""; position: absolute; top: 0; bottom: 0; width: 30%; background: var(--ls-accent); animation: ls-bar 1.1s ease-in-out infinite; }
+
+.ls-green-progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; overflow: hidden; display: none; background: rgba(34, 197, 94, 0.16); }
+.ls-browser-shell.is-installing .ls-green-progress { display: block; }
+.ls-green-progress::before {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 35%;
+  background: linear-gradient(90deg, #16a34a, #4ade80, #22c55e);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.85);
+  animation: ls-bar 1.1s ease-in-out infinite;
+}
 `;
 export function injectBrowserStyles() {
   const old = document.getElementById('ls-browser-styles');
