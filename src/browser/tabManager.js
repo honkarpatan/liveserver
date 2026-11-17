@@ -128,7 +128,11 @@ if (extMode === 'proxy' || extMode === 'chromium') {
   if (port) {
     const useChromium = extMode === 'chromium' || !!opts.useChromium;
     const engineParam = useChromium ? '&engine=chromium' : '';
-    return `http://127.0.0.1:${port}/__proxy?url=${encodeURIComponent(displayUrl)}${engineParam}`;
+    const frame = `http://127.0.0.1:${port}/__proxy?url=${encodeURIComponent(displayUrl)}${engineParam}`;
+    try {
+      console.log('[LiveServer] external frame', { mode: extMode, chromium: useChromium, url: displayUrl, frame: frame.slice(0, 160) });
+    } catch (_) {}
+    return frame;
   }
 }
   

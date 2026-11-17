@@ -1,12 +1,12 @@
 /**
- * Full acodels/index.js source + dynamic base64 encoder (marker: ls-proxy-v3).
+ * Full acodels/index.js source + dynamic base64 encoder (marker: ls-proxy-v5).
  * Fixes CSS/HTML regex escaping, Google form.submit() 404s, SPA history.pushState crashes,
  * and dynamic stylesheet/script loading through /__proxy.
  */
 import { toBase64 } from '../utils/alpineExec.js';
 
 export const ACODELS_INDEX_CODE = `/**
- * acodels — Live Server + Local Reverse Proxy Node backend (ls-proxy-v3, ls-bridge-v1)
+ * acodels — Live Server + Local Reverse Proxy Node backend (ls-proxy-v5, ls-bridge-v1)
  */
 const http = require('http');
 const https = require('https');
@@ -18,6 +18,7 @@ const zlib = require('zlib');
 const { URL } = require('url');
 const { Server: WebSocketServer } = require('ws');
 const chokidar = require('chokidar');
+const { execFile, execSync } = require('child_process');
 
 let BASE_DIR = null;
 let jsonData = {};
@@ -787,52 +788,90 @@ async function handleProxyRequest(req, res, targetUrl) {
   }
 }
 
+function resolveChromiumBin() {
+  const candidates = [
+    'chromium-browser',
+    'chromium',
+    'google-chrome',
+    'google-chrome-stable',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/lib/chromium/chromium',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+  ];
+  for (const c of candidates) {
+    try {
+      if (c.startsWith('/')) {
+        if (fs.existsSync(c)) return c;
+      } else {
+        execSync('command -v ' + c, { stdio: 'ignore' });
+        return c;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
 function renderWithHeadlessChromium(targetUrl) {
   return new Promise((resolve, reject) => {
-    const candidates = ['chromium', 'chromium-browser'];
+    const bin = resolveChromiumBin();
+    if (!bin) {
+      return reject(new Error('Chromium binary not found in PATH'));
+    }
     const args = [
-      '--headless',
+      '--headless=new',
       '--no-sandbox',
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--disable-software-rasterizer',
+      '--disable-extensions',
+      '--hide-scrollbars',
+      '--mute-audio',
       '--user-agent=Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-      '--virtual-time-budget=6000',
+      '--virtual-time-budget=8000',
+      '--timeout=20000',
       '--dump-dom',
       targetUrl,
     ];
-
-    const tryNext = (idx) => {
-      if (idx >= candidates.length) {
-        return reject(new Error('Chromium binary not installed'));
+    console.log('[acodels] chromium dump-dom bin=' + bin + ' url=' + targetUrl);
+    execFile(bin, args, { maxBuffer: 20 * 1024 * 1024, timeout: 30000 }, (err, stdout, stderr) => {
+      if (err && !stdout) {
+        console.error('[acodels] chromium fail', err && err.message, String(stderr || '').slice(0, 400));
+        return reject(err);
       }
-      execFile(candidates[idx], args, { maxBuffer: 15 * 1024 * 1024, timeout: 25000 }, (err, stdout) => {
-        if (err && err.code === 'ENOENT') {
-          return tryNext(idx + 1);
-        }
-        if (err && !stdout) {
-          return reject(err);
-        }
-        resolve(String(stdout || ''));
-      });
-    };
-    tryNext(0);
+      const html = String(stdout || '');
+      console.log('[acodels] chromium ok bytes=' + html.length);
+      if (html.length < 50) {
+        return reject(new Error('Chromium returned empty DOM'));
+      }
+      resolve(html);
+    });
   });
 }
 
 app.all(['/__proxy', '/_proxy'], (req, res) => {
   if (req.query.url) {
     const target = String(req.query.url);
-    if (req.query.engine === 'chromium') {
-      try {
-        const domHtml = await renderWithHeadlessChromium(target);
-        const rewritten = rewriteHtmlForProxy(domHtml, target);
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        return res.status(200).send(rewritten);
-      } catch (e) {
-        return handleProxyRequest(req, res, target);
-      }
+    const engine = String(req.query.engine || '');
+    console.log('[acodels] proxy request engine=' + (engine || 'node') + ' url=' + target.slice(0, 180));
+    if (engine === 'chromium') {
+      // Promise form — avoids "await outside async" parse errors
+      renderWithHeadlessChromium(target)
+        .then((domHtml) => {
+          const rewritten = rewriteHtmlForProxy(domHtml, target);
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('X-LS-Engine', 'chromium');
+          return res.status(200).send(rewritten);
+        })
+        .catch((e) => {
+          console.error('[acodels] chromium path failed, fallback node-proxy:', e && e.message);
+          res.setHeader('X-LS-Engine', 'node-fallback');
+          return handleProxyRequest(req, res, target);
+        });
+      return;
     }
+    res.setHeader('X-LS-Engine', 'node');
     return handleProxyRequest(req, res, target);
   }
   // Fallback when a GET form (like Google Search) strips ?url= and submits ?q=... directly to /__proxy
