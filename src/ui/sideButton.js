@@ -116,9 +116,8 @@ export function registerSideButton() {
 }
 
 export function onFileSwitch() {
-  const show =
-    getSettings().showSideButton !== false &&
-    (isHtmlFile(getActiveFile()) || getServerStatus().running);
+  // only for .html / .htm files
+  const show = getSettings().showSideButton !== false && isHtmlFile(getActiveFile());
   try {
     show ? sideButton?.show?.() : sideButton?.hide?.();
   } catch (_) {}

@@ -1,12 +1,15 @@
 import { registerPluginSettings } from './settingsPages.js';
 import { registerSideButton, unregisterSideButton, onFileSwitch, setLiveDot } from '../ui/sideButton.js';
 import { registerCommands, unregisterCommands } from '../commands/palette.js';
+import { setPluginBase } from './baseUrl.js';
+import { registerRunButton, unregisterRunButton, refreshRunButton } from '../ui/runButton.js';
 import { ensureLiveServerDeps, resetDepsSession } from '../deps/dependencyChecker.js';
 import { isHtmlFile, getActiveFile } from '../utils/paths.js';
 import { setProcessBaseUrl } from '../server/process.js';
 import { getServerStatus } from '../server/status.js';
 import { registerLiveReloadOnSave, unregisterLiveReloadOnSave } from '../server/liveReload.js';
 
+const FILE_EVENTS = ['switch-file', 'rename-file', 'file-loaded', 'new-file'];
 let baseUrl = '';
 let fileHandler = null;
 let statusHandler = null;
@@ -22,6 +25,7 @@ function injectUiCss() {
 export async function initPlugin(_baseUrl) {
   baseUrl = _baseUrl || '';
   setProcessBaseUrl(baseUrl);
+  setPluginBase(baseUrl);
   resetDepsSession();
   // clear bad cached acodels path from earlier builds
   try {
@@ -84,16 +88,25 @@ export async function initPlugin(_baseUrl) {
     console.warn('[LiveServer] liveReload', e);
   }
 
+  try {
+    registerRunButton();
+  } catch (e) {
+    console.warn('[LiveServer] run button', e);
+  }
+
   fileHandler = () => {
     onFileSwitch();
+    refreshRunButton();
     const f = getActiveFile();
     if (isHtmlFile(f)) {
       ensureLiveServerDeps({ baseUrl }).catch((e) => console.warn('[LiveServer:deps]', e));
     }
   };
-  try {
-    editorManager?.on?.('switch-file', fileHandler);
-  } catch (_) {}
+  FILE_EVENTS.forEach((ev) => {
+    try {
+      editorManager?.on?.(ev, fileHandler);
+    } catch (_) {}
+  });
   setTimeout(fileHandler, 400);
 
   statusHandler = () => setLiveDot(getServerStatus().running);
@@ -116,8 +129,13 @@ export async function initPlugin(_baseUrl) {
 }
 
 export function destroyPlugin() {
+  FILE_EVENTS.forEach((ev) => {
+    try {
+      if (fileHandler) editorManager?.off?.(ev, fileHandler);
+    } catch (_) {}
+  });
   try {
-    if (fileHandler) editorManager?.off?.('switch-file', fileHandler);
+    unregisterRunButton();
   } catch (_) {}
   try {
     window.removeEventListener('liveserver-status', statusHandler);

@@ -1,105 +1,84 @@
 /**
- * Editor-tab display mode — host browser chrome inside an Acode EditorFile / page tab
+ * Editor-tab display mode.
+ * Uses Acode's EditorFile with type "custom": the shell element is passed as
+ * `content` and is rendered inside the tab (Shadow DOM), so the stylesheet MUST
+ * be passed via `stylesheets` — document.head styles do not reach it.
+ * https://docs.acode.app/docs/editor-components/editor-file
  */
-import { svgIcon, ICONS } from '../utils/svg.js';
+let seq = 0;
 
-let editorFileRef = null;
-let hostEl = null;
-
-export function isEditorTabOpen() {
-  return !!editorFileRef || !!hostEl;
+function getEditorFileClass() {
+  for (const name of ['editorFile', 'EditorFile']) {
+    try {
+      const C = acode.require(name);
+      if (typeof C === 'function') return C;
+    } catch (_) {}
+  }
+  return null;
 }
 
 /**
- * Try Acode EditorFile API; fallback returns null
- * @returns {Promise<{ file: any, body: HTMLElement } | null>}
+ * @param {HTMLElement} el  browser shell element
+ * @param {{title?: string, css?: string, onClose?: () => void}} [opts]
+ * @returns {Promise<{close: () => void, file: any} | null>}  null = could not create a tab
  */
-export async function openEditorTabHost(title = 'Live Preview') {
-  closeEditorTabHost();
-  try {
-    const EditorFile = acode.require('editorFile');
-    if (typeof EditorFile !== 'function') return null;
+export async function mountInEditorTab(el, opts = {}) {
+  const EditorFile = getEditorFileClass();
+  if (!EditorFile) return null;
 
-    // Common patterns across Acode versions
-    let file;
+  el.classList.add('is-in-tab');
+  const title = opts.title || 'Live Preview';
+  const id = 'liveserver-preview-' + Date.now() + '-' + ++seq;
+
+  let file = null;
+  const attempts = [
+    { type: 'custom', content: el, stylesheets: opts.css ? [opts.css] : [], hideQuickTools: true, id, render: true },
+    // older builds: plain "page" type
+    { type: 'page', content: el, stylesheets: opts.css ? [opts.css] : [], id, render: true },
+  ];
+  for (const o of attempts) {
     try {
-      file = new EditorFile(title, { type: 'single', render: true });
-    } catch (_) {
-      try {
-        file = new EditorFile(title);
-      } catch (e2) {
-        console.warn('[LiveServer] EditorFile', e2);
-        return null;
-      }
+      file = new EditorFile(title, o);
+      break;
+    } catch (e) {
+      console.warn('[LiveServer] EditorFile ' + o.type, e);
+      file = null;
     }
-
-    editorFileRef = file;
-    // Wait a tick for tab DOM
-    await new Promise((r) => setTimeout(r, 50));
-
-    const body = document.createElement('div');
-    body.className = 'ls-editor-tab-host';
-    body.style.cssText =
-      'display:flex;flex-direction:column;height:100%;width:100%;min-height:0;background:var(--secondary-color,#1e1e1e);';
-
-    // Attach into editor content area
-    const container =
-      file.content ||
-      file.container ||
-      file.tab?.content ||
-      document.querySelector('.editor-container .active') ||
-      null;
-
-    if (container && container.appendChild) {
-      try {
-        container.innerHTML = '';
-        container.appendChild(body);
-      } catch (_) {
-        document.body.appendChild(body);
-      }
-    } else {
-      // Page API fallback
-      try {
-        const Page = acode.require('page');
-        const page = Page(title, { lead: null });
-        page.appendBody?.(body);
-        page.show?.();
-        file._lsPage = page;
-      } catch (_) {
-        return null;
-      }
-    }
-
-    hostEl = body;
-    try {
-      file.onclose = () => {
-        hostEl = null;
-        editorFileRef = null;
-      };
-    } catch (_) {}
-
-    return { file, body };
-  } catch (e) {
-    console.warn('[LiveServer] editorTab', e);
+  }
+  if (!file) {
+    el.classList.remove('is-in-tab');
     return null;
   }
-}
 
-export function getEditorTabBody() {
-  return hostEl;
-}
+  let done = false;
+  const handleClose = () => {
+    if (done) return;
+    done = true;
+    try {
+      opts.onClose?.();
+    } catch (_) {}
+  };
+  try {
+    file.on?.('close', handleClose);
+  } catch (_) {}
+  try {
+    file.onclose = handleClose;
+  } catch (_) {}
 
-export function closeEditorTabHost() {
-  try {
-    if (editorFileRef?.remove) editorFileRef.remove(true);
-    else if (editorFileRef?.close) editorFileRef.close();
-  } catch (_) {}
-  try {
-    editorFileRef?._lsPage?.hide?.();
-  } catch (_) {}
-  try {
-    hostEl?.remove();
-  } catch (_) {}
-  hostEl = null;
-  editorFileRef = null;
+  return {
+    file,
+    close() {
+      if (done) return;
+      done = true; // we are closing it ourselves — do not call onClose
+      try {
+        file.remove?.(true);
+      } catch (_) {
+        try {
+          file.remove?.();
+        } catch (_) {}
+      }
+    },
+    onFullscreen() {},
+    setAppearance() {}, // overlay needs the Acode page; opacity is applied on the shell
+  };
 }

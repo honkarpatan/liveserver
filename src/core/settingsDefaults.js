@@ -13,6 +13,11 @@ export const defaultSettings = {
   // Browser
   browserDisplayMode: 'inPage', // inPage | editorTab
   showSideButton: true,
+  browserOpacity: 1, // 0.1 - 1.0
+  browserOverlay: false, // preview as overlay: page is see-through and the editor underneath stays usable
+  overlayAutoSave: true, // overlay only: save the file shortly after typing so the preview updates live
+  browserBookmarks: [],
+  browserDevice: { on: false, id: 'responsive', w: 390, h: 844, zoom: 'fit' },
 
   // CORS / headers
   enableCors: true,

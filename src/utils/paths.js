@@ -1,8 +1,14 @@
 /**
  * Normalize Acode / Termux / SD card paths for server root & file URLs.
+ * Acode (Android) hands out several URI shapes:
+ *   file:///storage/emulated/0/proj/index.html
+ *   content://com.android.externalstorage.documents/tree/primary%3Aproj::primary:proj/index.html   (SAF tree)
+ *   content://com.android.externalstorage.documents/document/primary%3Aproj%2Findex.html          (SAF document)
+ *   content://com.termux.documents/tree/%2Fdata%2F...%2Fhome::/data/data/com.termux/files/home/x.html
+ * The Alpine (proot) side sees internal storage as /sdcard and SD cards as /storage/<VOLUME-ID>.
  */
 export function isHtmlFileName(name) {
-  return /\.(html?|xhtml)$/i.test(String(name || ''));
+  return /\.html?$/i.test(String(name || ''));
 }
 
 export function isHtmlFile(file) {
@@ -17,17 +23,54 @@ export function getActiveFile() {
   }
 }
 
+function dec(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch (_) {
+    return s;
+  }
+}
+
+/** "primary:dir/file" | "1A2B-3C4D:dir/file" -> absolute path as seen from Alpine */
+export function safSpecToFs(spec) {
+  const s = String(spec || '');
+  const i = s.indexOf(':');
+  if (i < 0) return s.startsWith('/') ? s : null;
+  const vol = s.slice(0, i);
+  const rest = s.slice(i + 1).replace(/^\/+/, '');
+  const tail = rest ? '/' + rest : '';
+  if (vol === 'primary') return '/sdcard' + tail;
+  if (vol === 'home') return '/sdcard/Documents' + tail;
+  if (/^[0-9A-F]{4}-[0-9A-F]{4}$/i.test(vol)) return '/storage/' + vol + tail;
+  return null;
+}
+
 /** Best-effort filesystem path from Acode file uri */
 export function uriToFsPath(uri) {
   if (!uri || typeof uri !== 'string') return null;
   let u = uri;
-  // content://... or file://
-  if (u.startsWith('file://')) {
-    try {
-      u = decodeURIComponent(u.replace(/^file:\/\//, ''));
-    } catch (_) {
-      u = u.replace(/^file:\/\//, '');
+
+  if (u.startsWith('content://')) {
+    // tree uri + "::" + document id/path (what Acode uses for files under an opened folder)
+    if (u.includes('::')) {
+      const tail = dec(u.split('::').pop());
+      if (tail.startsWith('/')) return tail; // termux style
+      const p = safSpecToFs(tail);
+      if (p) return p;
     }
+    // plain document uri
+    const di = u.indexOf('/document/');
+    if (di >= 0) {
+      const spec = dec(u.slice(di + '/document/'.length).split('?')[0]);
+      if (spec.startsWith('/')) return spec;
+      const p = safSpecToFs(spec);
+      if (p) return p;
+    }
+    return null;
+  }
+
+  if (u.startsWith('file://')) {
+    u = dec(u.replace(/^file:\/\//, ''));
   }
   // Termux-style
   if (u.includes('/data/data/com.termux/files/home')) {
@@ -39,7 +82,7 @@ export function uriToFsPath(uri) {
   }
   // sdcard
   if (/\/(storage|sdcard|emulated)\//i.test(u)) {
-    const m = u.match(/(\/(?:storage|sdcard|emulated)\/[^\s?]*)/i);
+    const m = u.match(/(\/(?:storage|sdcard|emulated)\/[^?#]*)/i);
     if (m) return m[1];
   }
   if (u.startsWith('/')) return u;

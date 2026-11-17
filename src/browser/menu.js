@@ -1,108 +1,164 @@
 /**
- * Browser menu + submenu (select-based, SVG-free labels)
+ * Browser menu — mirrors desktop Chrome's three-dot menu (custom dropdown, see dropdown.js)
  */
-const select = acode.require('select');
+import { openDropdown } from './dropdown.js';
+import { icon, I } from './icons.js';
+
 const toast = acode.require('toast');
 
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+    else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    toast('URL copied', 1500);
+  } catch (_) {
+    toast(text || 'No URL', 2500);
+  }
+}
+
+async function serverRoot() {
+  const { getServerStatus } = await import('../server/status.js');
+  const st = getServerStatus();
+  if (st.url) return st.url.replace(/\/[^/]*$/, '/');
+  if (st.port) return 'http://127.0.0.1:' + st.port + '/';
+  return null;
+}
+
+function short(s, n = 38) {
+  s = String(s || '');
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+function zoomRow(api) {
+  return {
+    render(row) {
+      const wrap = document.createElement('div');
+      wrap.className = 'ls-zoomrow';
+      const l = document.createElement('span');
+      l.className = 'ls-zl';
+      l.textContent = 'Zoom';
+      const minus = document.createElement('button');
+      minus.type = 'button';
+      minus.className = 'ls-ib';
+      minus.innerHTML = icon(I.minus, 14);
+      const v = document.createElement('span');
+      v.className = 'ls-zv';
+      v.textContent = (api.getZoom?.() ?? 100) + '%';
+      const plus = document.createElement('button');
+      plus.type = 'button';
+      plus.className = 'ls-ib';
+      plus.innerHTML = icon(I.plus, 14);
+      const fs = document.createElement('button');
+      fs.type = 'button';
+      fs.className = 'ls-ib';
+      fs.title = 'Fullscreen';
+      fs.innerHTML = icon(I.maximize, 14);
+      const bump = (d) => {
+        const z = api.zoom?.(d);
+        if (z != null) v.textContent = z + '%';
+      };
+      minus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        bump(-10);
+      });
+      plus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        bump(10);
+      });
+      v.style.cursor = 'pointer';
+      v.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const z = api.zoom?.(0, true);
+        if (z != null) v.textContent = z + '%';
+      });
+      fs.addEventListener('click', (e) => {
+        e.stopPropagation();
+        api.toggleFullscreen?.();
+      });
+      wrap.append(l, minus, v, plus, fs);
+      row.appendChild(wrap);
+    },
+  };
+}
+
 /**
- * @param {object} api
- * @param {() => void} api.reload
- * @param {() => void} api.newTab
- * @param {() => void} api.closeTab
- * @param {() => void} api.toggleFullscreen
- * @param {() => void} api.closeBrowser
- * @param {() => string} api.getUrl
- * @param {(url: string) => void} api.navigate
+ * @param {object} api  browser actions
+ * @param {{host: HTMLElement, anchor: HTMLElement}} where  shell element + the menu button
  */
-export async function openBrowserMenu(api) {
-  const choice = await select(
-    'Browser',
-    [
-      ['nav', 'Navigation ›'],
-      ['tabs', 'Tabs ›'],
-      ['view', 'View ›'],
-      ['copy', 'Copy current URL'],
-      ['close', 'Close browser'],
-    ],
-    { hideOnSelect: true }
-  ).catch(() => null);
+export function openBrowserMenu(api, where) {
+  const history = api.getVisited?.() || [];
+  const marks = api.getBookmarks?.() || [];
+  const marked = !!api.isBookmarked?.();
 
-  if (!choice) return;
-
-  if (choice === 'nav') {
-    const sub = await select(
-      'Navigation',
-      [
-        ['back', 'Back'],
-        ['forward', 'Forward'],
-        ['reload', 'Reload'],
-        ['home', 'Open server root'],
+  const items = [
+    { label: 'New tab', onClick: () => api.newTab?.() },
+    { label: 'Duplicate tab', onClick: () => api.duplicateTab?.() },
+    { separator: true },
+    {
+      label: 'History',
+      children: history.length
+        ? history.slice(0, 15).map((h) => ({ label: short(h.title || h.url), onClick: () => api.navigate?.(h.url) }))
+        : [{ label: 'No history yet', disabled: true }],
+    },
+    {
+      label: 'Bookmarks',
+      children: [
+        { label: marked ? 'Remove bookmark for this tab' : 'Bookmark this tab', onClick: () => api.toggleBookmark?.() },
+        ...(marks.length ? [{ separator: true }] : []),
+        ...marks.map((b) => ({ label: short(b.title || b.url), onClick: () => api.navigate?.(b.url) })),
       ],
-      { hideOnSelect: true }
-    ).catch(() => null);
-    if (sub === 'back') api.back?.();
-    if (sub === 'forward') api.forward?.();
-    if (sub === 'reload') api.reload?.();
-    if (sub === 'home') {
-      const { getServerStatus } = await import('../server/status.js');
-      const st = getServerStatus();
-      const root = st.url ? st.url.replace(/\/[^/]*$/, '/') : st.port ? `http://127.0.0.1:${st.port}/` : null;
-      if (root) api.navigate?.(root);
-      else toast('Server not running', 2000);
-    }
-    return;
-  }
-
-  if (choice === 'tabs') {
-    const sub = await select(
-      'Tabs',
-      [
-        ['new', 'New tab'],
-        ['close', 'Close current tab'],
-        ['closeOthers', 'Close other tabs'],
+    },
+    { separator: true },
+    zoomRow(api),
+    { label: 'Print…', onClick: () => api.print?.() },
+    { label: 'Find…', onClick: () => api.find?.() },
+    { label: 'Developer tools', checked: !!api.isDevtools?.(), onClick: () => api.toggleDevtools?.() },
+    { separator: true },
+    {
+      label: 'More tools',
+      children: [
+        { label: 'Device mode (responsive)', checked: !!api.isDeviceMode?.(), onClick: () => api.toggleDeviceMode?.() },
+        { label: 'View page source', onClick: () => api.viewSource?.() },
+        { separator: true },
+        {
+          label: 'Open server root',
+          onClick: async () => {
+            const root = await serverRoot();
+            if (root) api.navigate?.(root);
+            else toast('Server not running', 2000);
+          },
+        },
+        { label: 'Copy current URL', onClick: () => copyText(api.getUrl?.() || '') },
+        { label: 'Open in external browser', onClick: () => api.openExternal?.() },
+        { separator: true },
+        { label: 'Close other tabs', onClick: () => api.closeOtherTabs?.() },
+        { label: 'Close current tab', onClick: () => api.closeTab?.() },
       ],
-      { hideOnSelect: true }
-    ).catch(() => null);
-    if (sub === 'new') api.newTab?.();
-    if (sub === 'close') api.closeTab?.();
-    if (sub === 'closeOthers') api.closeOtherTabs?.();
-    return;
-  }
+    },
+    { label: 'Opacity…', onClick: () => api.openOpacity?.() },
+    {
+      label: 'Preview as overlay',
+      checked: !!api.isOverlay?.(),
+      disabled: !api.canOverlay?.(),
+      onClick: () => api.toggleOverlay?.(),
+    },
+    { separator: true },
+    {
+      label: 'Settings',
+      onClick: async () => {
+        const { openSettingsHub } = await import('../core/settingsPages.js');
+        openSettingsHub();
+      },
+    },
+    { label: 'Exit', onClick: () => api.closeBrowser?.() },
+  ];
 
-  if (choice === 'view') {
-    const sub = await select(
-      'View',
-      [
-        ['fs', 'Toggle fullscreen'],
-        ['desktop', 'Desktop width (100%)'],
-        ['mobile', 'Narrow width'],
-      ],
-      { hideOnSelect: true }
-    ).catch(() => null);
-    if (sub === 'fs') api.toggleFullscreen?.();
-    if (sub === 'desktop') api.setViewport?.('desktop');
-    if (sub === 'mobile') api.setViewport?.('mobile');
-    return;
-  }
-
-  if (choice === 'copy') {
-    const url = api.getUrl?.() || '';
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(url);
-      else {
-        const ta = document.createElement('textarea');
-        ta.value = url;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        ta.remove();
-      }
-      toast('URL copied', 1500);
-    } catch (_) {
-      toast(url || 'No URL', 2500);
-    }
-    return;
-  }
-
-  if (choice === 'close') api.closeBrowser?.();
+  return openDropdown({ host: where.host, anchor: where.anchor, items });
 }

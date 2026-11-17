@@ -12,7 +12,7 @@ export async function ensureFullAcodelsIndex(acodelsPath) {
       'D=' +
         shellEscape(dir) +
         '; if [ ! -f "$D/index.js" ]; then echo NEED; exit 0; fi; ' +
-        'if grep -q WebSocket "$D/index.js" 2>/dev/null && grep -q chokidar "$D/index.js" 2>/dev/null; then echo FULL; else echo NEED; fi',
+        'if grep -q WebSocket "$D/index.js" 2>/dev/null && grep -q chokidar "$D/index.js" 2>/dev/null && grep -q ls-bridge-v1 "$D/index.js" 2>/dev/null; then echo FULL; else echo NEED; fi',
       { timeoutMs: 8000 }
     );
     if (String(check).includes('FULL') && !String(check).includes('NEED')) {

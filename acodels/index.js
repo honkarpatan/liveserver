@@ -60,6 +60,10 @@ const erudaRealScript = `
 <script>if (typeof eruda !== 'undefined') eruda.init();</script>
 `;
 const inspectorScript = `<script src="/inspector.js"></script>`;
+/* ls-bridge-v1: page <-> Acode browser bridge + embedded Suger DevTool service worker (WebView-safe) */
+const LS_BRIDGE_JS = "/* Live Server page bridge: lets the Acode browser talk to a page served from another origin (postMessage). */\n(function () {\n  var P = window.__lsParent || window.parent;\n  if (window.__lsBridge || !P || P === window) return;\n  window.__lsBridge = 1;\n  function post(m) {\n    try { m.ls = 1; P.postMessage(m, '*'); } catch (e) {}\n  }\n  function fav() {\n    var l = document.querySelector('link[rel~=\"icon\"]');\n    return (l && l.href) || (location.origin + '/favicon.ico');\n  }\n  function meta() {\n    post({ type: 'meta', href: location.href, title: document.title || '', favicon: fav() });\n  }\n  if (document.readyState === 'complete') meta(); else window.addEventListener('load', meta);\n  window.addEventListener('popstate', function () { setTimeout(meta, 0); });\n  window.addEventListener('hashchange', function () { setTimeout(meta, 0); });\n  ['pushState', 'replaceState'].forEach(function (k) {\n    var o = history[k];\n    history[k] = function () { var r = o.apply(this, arguments); setTimeout(meta, 0); return r; };\n  });\n  try {\n    var t = document.querySelector('title');\n    if (t) new MutationObserver(meta).observe(t, { childList: true, characterData: true, subtree: true });\n  } catch (e) {}\n\n  var dtOn = false;\n  function devtools(d) {\n    try {\n      if (d.on) {\n        if (!window.suger) {\n          if (!d.code) { post({ type: 'need-devtools' }); return; }\n          var s = document.createElement('script');\n          s.textContent = d.code;\n          (document.head || document.documentElement).appendChild(s);\n        }\n        if (window.suger) {\n          if (!window.__lsDtInit) { window.__lsDtInit = 1; window.suger.init(); } else window.suger.show();\n          dtOn = true;\n        }\n      } else if (window.suger) {\n        window.suger.hide();\n        dtOn = false;\n      }\n    } catch (e) {\n      post({ type: 'devtools-error', message: String(e && e.message || e) });\n    }\n    post({ type: 'devtools', on: dtOn });\n  }\n\n  window.addEventListener('message', function (e) {\n    var d = e.data;\n    if (!d || d.ls !== 1 || e.source !== P) return;\n    try {\n      if (d.cmd === 'history') history.go(d.dir < 0 ? -1 : 1);\n      else if (d.cmd === 'reload') location.reload();\n      else if (d.cmd === 'stop') window.stop();\n      else if (d.cmd === 'zoom') document.documentElement.style.zoom = String((d.pct || 100) / 100);\n      else if (d.cmd === 'print') window.print();\n      else if (d.cmd === 'find') post({ type: 'found', ok: !!window.find(d.q, false, !!d.back, true, false, false, false) });\n      else if (d.cmd === 'devtools') devtools(d);\n      else if (d.cmd === 'ping') meta();\n    } catch (err) {}\n  });\n})();\n";
+const LS_DEVTOOL_SW = "// devtool-sw.js (WebViews Safe - JS Only)\n// HTML/Navigation requests are BYPASSED to prevent Deadlock within WebViews\n\nlet instrumentationEnabled = false;\nlet instrumentedCache = new Map();\nlet pendingInstrumentation = new Map();\n\nself.addEventListener('install', (event) => {\n  self.skipWaiting();\n});\n\nself.addEventListener('activate', (event) => {\n  event.waitUntil(self.clients.claim());\n});\n\nself.addEventListener('message', async (event) => {\n  if (!event.data) return;\n  const { type, enabled, url, code } = event.data;\n  \n  switch (type) {\n    case 'SET_INSTRUMENTATION':\n      instrumentationEnabled = enabled;\n      if (!enabled) {\n        instrumentedCache.clear();\n        pendingInstrumentation.clear();\n      }\n      break;\n\n    case 'CACHE_INSTRUMENTED':\n      if (url && code) {\n          instrumentedCache.set(url, code);\n          if (pendingInstrumentation.has(url)) {\n            const resolve = pendingInstrumentation.get(url);\n            pendingInstrumentation.delete(url);\n            resolve(code);\n          }\n      }\n      break;\n      \n    case 'CLEAR_CACHE':\n      instrumentedCache.clear();\n      pendingInstrumentation.clear();\n      break;\n  }\n});\n\nself.addEventListener('fetch', (event) => {\n  const url = new URL(event.request.url);\n  if (event.request.mode === 'navigate' || event.request.destination === 'document') {\n      return; \n  }\n  \n  if (url.origin !== self.location.origin) return;\n  if (event.request.headers.has('X-DevTool-Request')) return;\n  if (url.pathname.includes('devtool-sw.js') || \n      url.pathname.includes('suger-dev') ||\n      url.pathname.includes('socket')) {\n    return;\n  }\n\n  if (!instrumentationEnabled) return;\n  if (url.pathname.endsWith('.js')) {\n    event.respondWith(handleJSRequest(event.request, url));\n    return;\n  }\n});\n\nasync function handleJSRequest(request, url) {\n  try {\n    // Cache Check\n    if (instrumentedCache.has(url.href)) {\n      return new Response(instrumentedCache.get(url.href), {\n        headers: { 'Content-Type': 'application/javascript' }\n      });\n    }\n\n    // Fetching origin file\n    const response = await fetch(request);\n    if (!response.ok) return response;\n\n    const originalCode = await response.text();\n\n    // Req for instrumentation \n    // take 5sec Otherwise give original\n    const instrumentedCode = await requestInstrumentation(url.href, originalCode);\n\n    return new Response(instrumentedCode, {\n      headers: { 'Content-Type': 'application/javascript' }\n    });\n\n  } catch (error) {\n    // if error then release original req\n    return fetch(request);\n  }\n}\n\nasync function requestInstrumentation(url, code) {\n  const instrumentationPromise = new Promise((resolve) => {\n    pendingInstrumentation.set(url, resolve);\n  });\n\n  // message to main thrrad\n  const clientSent = await sendToMainThread({\n    type: 'INSTRUMENT_REQUEST',\n    data: { url, code }\n  });\n\n  if (!clientSent) {\n      pendingInstrumentation.delete(url);\n      return code;\n  }\n\n  // extra safety\n  const timeoutPromise = new Promise((resolve) => {\n    setTimeout(() => {\n      if (pendingInstrumentation.has(url)) {\n          pendingInstrumentation.delete(url);\n          // console.warn('[SW] Instrumentation timed out for:', url);\n          resolve(code); // Fallback to original\n      }\n    }, 2000);\n  });\n\n  return Promise.race([instrumentationPromise, timeoutPromise]);\n}\n\nasync function sendToMainThread(message) {\n  const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' });\n  \n  let targetClient = clients.find(c => c.visibilityState === 'visible') || clients[0];\n\n  if (targetClient) {\n    targetClient.postMessage(message);\n    return true;\n  }\n  return false;\n}";
+const lsBridgeScript = '<script src="/__ls/bridge.js"></script>';
 const zoomScript = `
 <script src="/zoom-handler.js"></script>
 <script>try { new ZoomHandler(document.body); } catch (e) {}</script>`;
@@ -207,13 +211,18 @@ app.patch('/setup', (req, res) => {
   }
 });
 
+app.get('/__ls/bridge.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.send(LS_BRIDGE_JS);
+});
+
 app.get('/devtool-sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Service-Worker-Allowed', '/');
   const swPath = path.join(__dirname, 'devtool-sw.js');
-  if (fs.existsSync(swPath)) {
-    res.setHeader('Content-Type', 'application/javascript');
-    res.setHeader('Service-Worker-Allowed', '/');
-    res.sendFile(swPath);
-  } else res.status(404).send('SW not found');
+  if (fs.existsSync(swPath)) res.sendFile(swPath);
+  else res.send(LS_DEVTOOL_SW);
 });
 
 app.get('/dt/suger-dev.js', (req, res) => {
@@ -243,6 +252,9 @@ function injectHtml(html) {
   if (zoomEnabled) {
     injected = injected.replace(/<\/body>/i, zoomScript + '</body>');
   }
+  // page <-> browser bridge (always)
+  if (/<\/body>/i.test(injected)) injected = injected.replace(/<\/body>/i, lsBridgeScript + '</body>');
+  else injected += lsBridgeScript;
   return injected;
 }
 

@@ -63,6 +63,37 @@ async function isPortAlive(port, opts = {}) {
   return false;
 }
 
+/**
+ * Make sure the root folder is visible from inside Alpine (proot).
+ * Shared storage shows up as /sdcard (or /storage/emulated/0) only when Acode has
+ * storage permission, so probe both spellings before starting the server.
+ * Returns the usable path, or null when the folder is definitely not reachable.
+ */
+async function resolveAlpineRoot(root) {
+  const r = String(root || '').replace(/\/+$/, '') || '/';
+  const cands = [r];
+  let m = r.match(/^\/storage\/emulated\/0(\/.*)?$/);
+  if (m) cands.push('/sdcard' + (m[1] || ''));
+  m = r.match(/^\/sdcard(\/.*)?$/);
+  if (m) cands.push('/storage/emulated/0' + (m[1] || ''));
+  if (!/^\/(sdcard|storage)(\/|$)/.test(r)) return r; // alpine-internal path, nothing to probe
+  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+  let out = '';
+  try {
+    out = await silentExec(
+      'for d in ' + cands.map(q).join(' ') + '; do [ -d "$d" ] && { echo "OK:$d"; exit 0; }; done; echo NONE',
+      { timeoutMs: 10000 }
+    );
+  } catch (e) {
+    console.warn('[LiveServer] root probe failed, using path as is', e);
+    return r;
+  }
+  const hit = String(out || '').match(/OK:(.+)/);
+  if (hit) return hit[1].trim();
+  if (/NONE/.test(String(out || ''))) return null;
+  return r; // probe gave no answer — do not block the start
+}
+
 function parseCustomHeaders(text) {
   const out = {};
   String(text || '')
@@ -210,6 +241,14 @@ export async function startServer(opts = {}) {
 
   const fileName = opts.fileName || relativeFileUnderRoot(root);
   const s = getSettings();
+
+  const aroot = await resolveAlpineRoot(root);
+  if (!aroot) {
+    setServerStatus({ running: false, lastError: 'root not reachable' });
+    toast('Folder not reachable from Alpine: ' + root + ' (allow Acode storage permission)', 4500);
+    return false;
+  }
+  if (aroot !== root) console.log('[LiveServer] root mapped', root, '->', aroot);
   const nodeBind = '0.0.0.0';
 
   if (!(await isPortAlive(port, { deep: true }))) {
@@ -256,7 +295,7 @@ export async function startServer(opts = {}) {
     }
   }
 
-  const configured = await patchSetup(port, root, fileName);
+  const configured = await patchSetup(port, aroot, fileName);
   if (!configured) {
     console.warn('[LiveServer] /setup patch failed');
   }
@@ -270,7 +309,7 @@ export async function startServer(opts = {}) {
   setServerStatus({
     running: true,
     port,
-    root,
+    root: aroot,
     url: pageUrl,
     fileName,
     bind: nodeBind,
@@ -286,10 +325,10 @@ export async function startServer(opts = {}) {
     );
   } catch (_) {}
 
-  if (opts.openBrowser !== false && s.openBrowserOnStart !== false) {
+  if (opts.openBrowser === true || (opts.openBrowser !== false && s.openBrowserOnStart !== false)) {
     try {
       const { openBrowser } = await import('../browser/index.js');
-      openBrowser(pageUrl);
+      openBrowser(pageUrl, { reuse: true });
     } catch (e) {
       console.warn('[LiveServer] open browser', e);
     }
