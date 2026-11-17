@@ -5,43 +5,30 @@ import { setPluginBase } from './baseUrl.js';
 import { registerRunButton, unregisterRunButton, refreshRunButton } from '../ui/runButton.js';
 import { ensureLiveServerDeps, resetDepsSession } from '../deps/dependencyChecker.js';
 import { isHtmlFile, getActiveFile } from '../utils/paths.js';
-import { setProcessBaseUrl } from '../server/process.js';
+import { setProcessBaseUrl, probeExistingServer } from '../server/process.js';
 import { getServerStatus } from '../server/status.js';
 import { registerLiveReloadOnSave, unregisterLiveReloadOnSave } from '../server/liveReload.js';
 
 const FILE_EVENTS = ['switch-file', 'rename-file', 'file-loaded', 'new-file'];
+
 let baseUrl = '';
 let fileHandler = null;
 let statusHandler = null;
-
-function injectUiCss() {
-  if (document.getElementById('ls-ui-styles')) return;
-  try {
-    // styles.css is bundled as text only if imported — inject key rules from ui via fetch not available
-    // browser/styles injects its own; deps styles duplicated in browser path — add link if file served
-  } catch (_) {}
-}
+let visibilityHandler = null;
 
 export async function initPlugin(_baseUrl) {
   baseUrl = _baseUrl || '';
   setProcessBaseUrl(baseUrl);
   setPluginBase(baseUrl);
   resetDepsSession();
-  // clear bad cached acodels path from earlier builds
+
   try {
     const { getSettings, updateSetting } = await import('./settings.js');
     const p = getSettings().acodelsPath || '';
     if (/^\/public|com\.termux/.test(String(p))) updateSetting('acodelsPath', '');
   } catch (_) {}
 
-  // Inject deps CSS
   try {
-    const style = document.createElement('style');
-    style.id = 'ls-ui-styles';
-    // minimal critical deps styles (full sheet also in ui/styles.css for source)
-    style.textContent = document.querySelector('#ls-ui-styles')
-      ? ''
-      : ''; // filled below via import side effect alternative
     if (!document.getElementById('ls-ui-styles-data')) {
       const s2 = document.createElement('style');
       s2.id = 'ls-ui-styles-data';
@@ -62,37 +49,16 @@ export async function initPlugin(_baseUrl) {
 .ls-dp-progress-bar{height:100%;background:var(--active-color,#61afef);transition:width .25s}
 .ls-dp-spinner{width:16px;height:16px;border-radius:50%;border:2px solid rgba(128,128,128,.35);border-top-color:var(--active-color,#61afef);animation:ls-spin .7s linear infinite}
 @keyframes ls-spin{to{transform:rotate(360deg)}}
-`;
+      `;
       document.head.appendChild(s2);
     }
   } catch (_) {}
 
-  try {
-    registerPluginSettings();
-  } catch (e) {
-    console.warn('[LiveServer] settings', e);
-  }
-  try {
-    registerSideButton();
-  } catch (e) {
-    console.warn('[LiveServer] side', e);
-  }
-  try {
-    registerCommands();
-  } catch (e) {
-    console.warn('[LiveServer] commands', e);
-  }
-  try {
-    registerLiveReloadOnSave();
-  } catch (e) {
-    console.warn('[LiveServer] liveReload', e);
-  }
-
-  try {
-    registerRunButton();
-  } catch (e) {
-    console.warn('[LiveServer] run button', e);
-  }
+  try { registerPluginSettings(); } catch (e) { console.warn('[LiveServer] settings', e); }
+  try { registerSideButton(); } catch (e) { console.warn('[LiveServer] side', e); }
+  try { registerCommands(); } catch (e) { console.warn('[LiveServer] commands', e); }
+  try { registerLiveReloadOnSave(); } catch (e) { console.warn('[LiveServer] liveReload', e); }
+  try { registerRunButton(); } catch (e) { console.warn('[LiveServer] run button', e); }
 
   fileHandler = () => {
     onFileSwitch();
@@ -102,12 +68,10 @@ export async function initPlugin(_baseUrl) {
       ensureLiveServerDeps({ baseUrl }).catch((e) => console.warn('[LiveServer:deps]', e));
     }
   };
+
   FILE_EVENTS.forEach((ev) => {
-    try {
-      editorManager?.on?.(ev, fileHandler);
-    } catch (_) {}
+    try { editorManager?.on?.(ev, fileHandler); } catch (_) {}
   });
-  setTimeout(fileHandler, 400);
 
   statusHandler = () => setLiveDot(getServerStatus().running);
   try {
@@ -116,8 +80,22 @@ export async function initPlugin(_baseUrl) {
     window.addEventListener('liveserver-stopped', statusHandler);
   } catch (_) {}
 
+  // Detect already-running server immediately on startup/restart and on app resume
+  const syncLiveState = async () => {
+    const alive = await probeExistingServer();
+    setLiveDot(alive);
+  };
+  syncLiveState();
+  setTimeout(syncLiveState, 1200);
+  setTimeout(fileHandler, 400);
+
+  visibilityHandler = () => {
+    if (document.visibilityState === 'visible') syncLiveState();
+  };
+  document.addEventListener('visibilitychange', visibilityHandler);
+
   try {
-    window.addEventListener('liveserver-settings', async (ev) => {
+    window.addEventListener('liveserver-settings', async () => {
       try {
         const { reapplySetup } = await import('../server/process.js');
         if (getServerStatus().running) await reapplySetup();
@@ -134,20 +112,26 @@ export function destroyPlugin() {
       if (fileHandler) editorManager?.off?.(ev, fileHandler);
     } catch (_) {}
   });
-  try {
-    unregisterRunButton();
-  } catch (_) {}
+  try { unregisterRunButton(); } catch (_) {}
   try {
     window.removeEventListener('liveserver-status', statusHandler);
     window.removeEventListener('liveserver-started', statusHandler);
     window.removeEventListener('liveserver-stopped', statusHandler);
   } catch (_) {}
+  if (visibilityHandler) {
+    document.removeEventListener('visibilitychange', visibilityHandler);
+    visibilityHandler = null;
+  }
   unregisterSideButton();
   unregisterCommands();
   try { unregisterLiveReloadOnSave(); } catch (_) {}
   try {
     import('../browser/index.js').then((m) => m.hideBrowser?.());
   } catch (_) {}
+  try {
+    import('../browser/nativeWebview.js').then((m) => m.destroyAcodeWebview?.());
+  } catch (_) {}
+  
 }
 
 export function getBaseUrl() {

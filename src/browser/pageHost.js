@@ -1,17 +1,13 @@
 /**
  * Hosts the browser inside a real Acode Page (acode.require('page')).
- * - Acode's own page header (<header class="tile"> with back arrow + title) is hidden, the browser
- *   draws its own chrome edge to edge.
- * - Acode's Page does not push itself onto the action stack, so we do it here: the hardware back
- *   button behaves like on any Acode page (closes the page), but first lets the browser dismiss
- *   an open menu / find bar / fullscreen (opts.onBack returns true when it handled the press).
+ * Minimizes (hides) on hardware back so open tabs & searched pages stay intact,
+ * and destroys only when explicitly closed via Close / Exit.
  */
 let seq = 0;
 
 /**
  * @param {HTMLElement} el   browser shell element
  * @param {{title?: string, onClose?: () => void, onBack?: () => boolean}} [opts]
- * @returns {{close: () => void, onFullscreen: (on: boolean) => void, page: any}}
  */
 export function mountInPage(el, opts = {}) {
   const Page = acode.require('page');
@@ -26,8 +22,8 @@ export function mountInPage(el, opts = {}) {
   const page = Page(opts.title || 'Live Preview', { lead: back });
   const body = page.body || page;
   const hdr = page.header || page.querySelector?.('header');
-  if (hdr) hdr.style.display = 'none'; // no Acode header
-  // body fills the whole page now that the header is gone
+  if (hdr) hdr.style.display = 'none';
+
   Object.assign(body.style, {
     position: 'absolute',
     inset: '0',
@@ -47,6 +43,52 @@ export function mountInPage(el, opts = {}) {
   else body.appendChild(el);
 
   let done = false;
+  let savedCss = null;
+
+  const handleBack = () => {
+    let handled = false;
+    try {
+      handled = !!opts.onBack?.();
+    } catch (_) {}
+    if (handled) {
+      try {
+        actionStack.remove(id);
+        actionStack.push({ id, action: handleBack });
+      } catch (_) {}
+      return;
+    }
+    minimize();
+  };
+
+  function pushBackHandler() {
+    try {
+      actionStack.remove(id);
+      actionStack.push({ id, action: handleBack });
+    } catch (_) {}
+  }
+
+  function minimize() {
+    if (done) return;
+    try {
+      actionStack.remove(id);
+    } catch (_) {}
+    try {
+      page.style.display = 'none';
+    } catch (_) {}
+  }
+
+  function show() {
+    if (done) return;
+    try {
+      page.style.display = '';
+      if (!page.isConnected) {
+        (window.app || document.body).append(page);
+      }
+      page.show?.();
+    } catch (_) {}
+    pushBackHandler();
+  }
+
   function finish(notify) {
     if (done) return;
     done = true;
@@ -74,41 +116,29 @@ export function mountInPage(el, opts = {}) {
       e?.preventDefault?.();
       e?.stopPropagation?.();
     } catch (_) {}
-    finish(true);
+    minimize();
   };
-  // page hidden by Acode itself
+
+  // When Acode hides the page (e.g. switching context), keep tabs alive instead of destroying them
   try {
-    page.onhide = () => finish(true);
-  } catch (_) {}
-  const handleBack = () => {
-    let handled = false;
-    try {
-      handled = !!opts.onBack?.();
-    } catch (_) {}
-    if (handled) {
-      // actionStack.pop() removed our entry before calling us — put it back
-      try {
-        actionStack.push({ id, action: handleBack });
-      } catch (_) {}
-      return;
-    }
-    finish(true);
-  };
-  try {
-    actionStack.push({ id, action: handleBack });
+    page.onhide = () => {
+      if (!done) minimize();
+    };
   } catch (_) {}
 
   (window.app || document.body).append(page);
 
-  // the page must be a positioning context for the absolute body
   try {
     if (getComputedStyle(page).position === 'static') {
       Object.assign(page.style, { position: 'absolute', inset: '0', width: '100%', height: '100%' });
     }
   } catch (_) {}
 
-  // ---- appearance: opacity + overlay (see-through, editor stays usable underneath)
-  let savedCss = null;
+  try {
+    page.show?.();
+  } catch (_) {}
+  pushBackHandler();
+
   const editorRect = () => {
     try {
       const c = window.editorManager?.container;
@@ -117,6 +147,7 @@ export function mountInPage(el, opts = {}) {
     } catch (_) {}
     return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
   };
+
   const place = () => {
     const r = editorRect();
     page.style.left = r.left + 'px';
@@ -124,6 +155,7 @@ export function mountInPage(el, opts = {}) {
     page.style.width = r.width + 'px';
     page.style.height = r.height + 'px';
   };
+
   const onResize = () => {
     if (savedCss != null) place();
   };
@@ -131,6 +163,8 @@ export function mountInPage(el, opts = {}) {
 
   return {
     page,
+    show,
+    minimize,
     setAppearance({ overlay, opacity }) {
       if (overlay) {
         if (savedCss == null) savedCss = page.style.cssText;
@@ -155,6 +189,6 @@ export function mountInPage(el, opts = {}) {
       window.removeEventListener('resize', onResize);
       finish(false);
     },
-    onFullscreen() {}, // header is already hidden; the shell goes position:fixed itself
+    onFullscreen() {},
   };
 }

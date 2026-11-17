@@ -54,7 +54,7 @@ export function registerCommands() {
       const { openBrowser } = await import('../browser/index.js');
       const st = getServerStatus();
       if (!st.running) return toast('Server is not running', 2000);
-      openBrowser(st.url || `http://127.0.0.1:${st.port}/`);
+      openBrowser(st.url || `http://127.0.0.1:${st.port}/`, { restoreOnly: true });
     });
 
     add('liveserver:settings', 'Live Server: Open settings', async () => {

@@ -1,10 +1,5 @@
 /**
  * Start / stop Node acodels backend without opening a terminal UI.
- *
- * IMPORTANT: Executor spawns a fresh proot per call and proot runs with
- * --kill-on-exit, so a `nohup node &` is killed the moment the command ends.
- * Fix: run node in the FOREGROUND of an un-awaited Executor.execute() call.
- * That promise stays pending while the server lives, which keeps proot alive.
  */
 import { getSettings, updateSetting } from '../core/settings.js';
 import { silentExec, wrapSh, getExecutor } from '../utils/alpineExec.js';
@@ -16,9 +11,9 @@ import { getServerStatus, setServerStatus, refreshStatusFromBackend } from './st
 import { getActiveFile, uriToFsPath } from '../utils/paths.js';
 
 const toast = acode.require('toast');
-
 let baseUrlRef = '';
 let inactivityTimer = null;
+
 /** token of the currently running foreground node call (null = none) */
 let serverProc = null;
 
@@ -27,10 +22,10 @@ export function setProcessBaseUrl(url) {
 }
 
 /** Fast check via WebView fetch */
-async function fetchAlive(port) {
+async function fetchAlive(port, timeoutMs = 800) {
   try {
     const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 1200);
+    const to = setTimeout(() => ctrl.abort(), timeoutMs);
     const res = await fetch('http://127.0.0.1:' + port + '/check', { signal: ctrl.signal });
     clearTimeout(to);
     return !!(res && res.ok);
@@ -63,11 +58,16 @@ async function isPortAlive(port, opts = {}) {
   return false;
 }
 
+/** Synchronous path mapping when server is already running (avoids proot delay) */
+function mapRootFast(root) {
+  const r = String(root || '').replace(/\/+$/, '') || '/';
+  const m = r.match(/^\/storage\/emulated\/0(\/.*)?$/);
+  if (m) return '/sdcard' + (m[1] || '');
+  return r;
+}
+
 /**
  * Make sure the root folder is visible from inside Alpine (proot).
- * Shared storage shows up as /sdcard (or /storage/emulated/0) only when Acode has
- * storage permission, so probe both spellings before starting the server.
- * Returns the usable path, or null when the folder is definitely not reachable.
  */
 async function resolveAlpineRoot(root) {
   const r = String(root || '').replace(/\/+$/, '') || '/';
@@ -76,7 +76,8 @@ async function resolveAlpineRoot(root) {
   if (m) cands.push('/sdcard' + (m[1] || ''));
   m = r.match(/^\/sdcard(\/.*)?$/);
   if (m) cands.push('/storage/emulated/0' + (m[1] || ''));
-  if (!/^\/(sdcard|storage)(\/|$)/.test(r)) return r; // alpine-internal path, nothing to probe
+  if (!/^\/(sdcard|storage)(\/|$)/.test(r)) return r;
+
   const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
   let out = '';
   try {
@@ -91,7 +92,7 @@ async function resolveAlpineRoot(root) {
   const hit = String(out || '').match(/OK:(.+)/);
   if (hit) return hit[1].trim();
   if (/NONE/.test(String(out || ''))) return null;
-  return r; // probe gave no answer — do not block the start
+  return r;
 }
 
 function parseCustomHeaders(text) {
@@ -189,14 +190,58 @@ function armInactivityTimer() {
   }, 30000);
 }
 
-/**
- * Launch node in the foreground of a long-lived Executor call.
- * Returns immediately (does NOT await node).
- */
+/** Detect an already-running backend server (e.g. after Acode restart) */
+export async function probeExistingServer() {
+  const port = getConfiguredPort();
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 1200);
+    const res = await fetch(`http://127.0.0.1:${port}/status`, { signal: ctrl.signal });
+    clearTimeout(to);
+    if (!res || !res.ok) return false;
+
+    const data = await res.json().catch(() => ({}));
+    const activePort = data.port || port;
+    const fileName = data.fileName || null;
+    const urlBase = buildServerUrl(activePort, '127.0.0.1');
+    const pageUrl =
+      fileName && fileName !== 'index.html'
+        ? urlBase.replace(/\/$/, '/') + encodeURI(fileName)
+        : urlBase;
+
+    const prev = getServerStatus();
+    setServerStatus({
+      running: true,
+      port: activePort,
+      root: data.root || prev.root || null,
+      url: pageUrl,
+      fileName,
+      bind: data.bind || '0.0.0.0',
+      startedAt:
+        prev.startedAt ||
+        (data.uptime ? Date.now() - Math.round(Number(data.uptime) * 1000) : Date.now()),
+      lastError: null,
+    });
+    armInactivityTimer();
+
+    if (!prev.running) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent('liveserver-started', {
+            detail: { url: pageUrl, port: activePort, root: data.root || null, fileName },
+          })
+        );
+      } catch (_) {}
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function launchNodeForeground(port, acodelsPath) {
   const ex = getExecutor();
   if (!ex?.execute) throw new Error('Executor not available. Open Acode Terminal once, then retry.');
-
   const startCmd =
     'ACODIR=""; ' +
     'for d in "' + String(acodelsPath || '').replace(/"/g, '') + '" /root/.acode_liveserver/acodels /home/root/.acode_liveserver/acodels; do ' +
@@ -208,13 +253,11 @@ function launchNodeForeground(port, acodelsPath) {
 
   const token = {};
   serverProc = token;
-
-  // Do NOT await: stays pending while node runs, which keeps proot alive.
   ex.execute(wrapSh(startCmd), true)
     .then((out) => console.log('[LiveServer] node exited', String(out || '').slice(0, 200)))
     .catch((e) => console.warn('[LiveServer] node exited', String(e?.message || e).slice(0, 200)))
     .finally(() => {
-      if (serverProc !== token) return; // stopped/restarted on purpose
+      if (serverProc !== token) return;
       serverProc = null;
       if (getServerStatus().running) {
         setServerStatus({ running: false, lastError: 'server process exited' });
@@ -226,31 +269,85 @@ function launchNodeForeground(port, acodelsPath) {
 }
 
 export async function startServer(opts = {}) {
+  const port = opts.port || getConfiguredPort();
+  const root = opts.root || getEffectiveRoot();
+  const s = getSettings();
+
+  // FAST PATH: server is already running -> skip proot deps/root checks and open immediately
+  if (!opts.forceDeps && (await fetchAlive(port))) {
+    const st = getServerStatus();
+    const effectiveRoot = root || st.root;
+    if (!effectiveRoot) {
+      toast('Set a root folder or open an HTML file', 2500);
+      return false;
+    }
+
+    const aroot = mapRootFast(effectiveRoot);
+    const fileName = opts.fileName || relativeFileUnderRoot(effectiveRoot);
+    const needsSetup = !st.running || st.port !== port || st.root !== aroot || st.fileName !== fileName;
+
+    if (needsSetup) {
+      await patchSetup(port, aroot, fileName);
+    }
+
+    const urlBase = buildServerUrl(port, '127.0.0.1');
+    const pageUrl =
+      fileName && fileName !== 'index.html'
+        ? urlBase.replace(/\/$/, '/') + encodeURI(fileName)
+        : urlBase;
+
+    setServerStatus({
+      running: true,
+      port,
+      root: aroot,
+      url: pageUrl,
+      fileName,
+      bind: '0.0.0.0',
+      startedAt: st.startedAt || Date.now(),
+      lastError: null,
+    });
+    armInactivityTimer();
+
+    if (!st.running) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent('liveserver-started', { detail: { url: pageUrl, port, root: aroot, fileName } })
+        );
+      } catch (_) {}
+    }
+
+    if (opts.openBrowser === true || (opts.openBrowser !== false && s.openBrowserOnStart !== false)) {
+      try {
+        const { openBrowser } = await import('../browser/index.js');
+        openBrowser(pageUrl, { reuse: true });
+      } catch (e) {
+        console.warn('[LiveServer] open browser', e);
+      }
+    }
+    return true;
+  }
+
+  // COLD START PATH
   const depsOk = await ensureLiveServerDeps({ baseUrl: baseUrlRef, force: !!opts.forceDeps });
   if (!depsOk) {
     toast('Dependencies required', 2000);
     return false;
   }
 
-  const port = opts.port || getConfiguredPort();
-  const root = opts.root || getEffectiveRoot();
   if (!root) {
     toast('Set a root folder or open an HTML file', 2500);
     return false;
   }
 
   const fileName = opts.fileName || relativeFileUnderRoot(root);
-  const s = getSettings();
-
   const aroot = await resolveAlpineRoot(root);
   if (!aroot) {
     setServerStatus({ running: false, lastError: 'root not reachable' });
     toast('Folder not reachable from Alpine: ' + root + ' (allow Acode storage permission)', 4500);
     return false;
   }
-  if (aroot !== root) console.log('[LiveServer] root mapped', root, '->', aroot);
-  const nodeBind = '0.0.0.0';
 
+  const nodeBind = '0.0.0.0';
   if (!(await isPortAlive(port, { deep: true }))) {
     const acodels = await resolveAcodelsPath(baseUrlRef);
     try {
@@ -258,8 +355,7 @@ export async function startServer(opts = {}) {
     } catch (e) {
       console.warn('[LiveServer] ensure index', e);
     }
-
-    toast('Starting server…', 1200);
+    toast('Starting server...', 1200);
     try {
       launchNodeForeground(port, acodels);
     } catch (e) {
@@ -270,16 +366,14 @@ export async function startServer(opts = {}) {
 
     let up = false;
     for (let i = 0; i < 40; i++) {
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 300));
       if (await isPortAlive(port)) {
         up = true;
         break;
       }
-      // node already died? (token cleared by .finally)
       if (!serverProc) break;
     }
     if (!up && serverProc) up = await isPortAlive(port, { deep: true });
-
     if (!up) {
       try {
         const log = await silentExec(
@@ -319,6 +413,7 @@ export async function startServer(opts = {}) {
   updateSetting('port', port);
   armInactivityTimer();
   toast('Live on ' + pageUrl, 2500);
+
   try {
     window.dispatchEvent(
       new CustomEvent('liveserver-started', { detail: { url: pageUrl, port, root, fileName } })
@@ -340,11 +435,11 @@ export async function stopServer() {
   clearInactivityTimer();
   const st = getServerStatus();
   const port = st.port || getConfiguredPort();
-  serverProc = null; // so the foreground call's .finally() stays quiet
+  serverProc = null;
   try {
     await silentExec(
       '(pkill -f "node index.js ' + port + '" 2>/dev/null; fuser -k ' + port + '/tcp 2>/dev/null; true)',
-      { timeoutMs: 15000 } // object form — a bare number would disable alpine mode
+      { timeoutMs: 15000 }
     );
   } catch (_) {}
   for (let i = 0; i < 8; i++) {
@@ -389,7 +484,6 @@ export async function changePortAndRestart() {
   return startServer({ port });
 }
 
-/** Re-apply settings to a running server without full restart */
 export async function reapplySetup() {
   const st = getServerStatus();
   if (!st.running || !st.port || !st.root) return false;

@@ -3,6 +3,7 @@
  */
 import { icon, I } from './icons.js';
 import { loadDevtoolCode } from './devtool.js';
+import { getSettings } from '../core/settings.js';
 
 const toast = acode.require('toast');
 
@@ -10,7 +11,7 @@ let tabs = [];
 let activeTabId = null;
 let nextId = 1;
 let listeners = [];
-let visited = []; // [{url,title}] newest first (session history)
+let visited = []; // [{url,title,ts}] newest first (session history)
 
 export function getTabs() {
   return tabs.slice();
@@ -22,6 +23,11 @@ export function getActiveTab() {
 
 export function getVisited() {
   return visited.slice();
+}
+
+export function clearVisited() {
+  visited = [];
+  emit();
 }
 
 export function onTabsChange(fn) {
@@ -42,15 +48,38 @@ function emit() {
 function remember(url, title) {
   if (!url || url === 'about:blank' || url.startsWith('blob:')) return;
   visited = visited.filter((v) => v.url !== url);
-  visited.unshift({ url, title: title || url });
-  if (visited.length > 30) visited.length = 30;
+  visited.unshift({ url, title: title || url.replace(/^https?:\/\//i, ''), ts: Date.now() });
+  if (visited.length > 50) visited.length = 50;
 }
 
-/**
- * The previewed page (http://127.0.0.1:PORT) is cross-origin to Acode, so most calls go through the
- * page bridge (server-injected /__ls/bridge.js, postMessage). Direct access is tried first and is only
- * possible when both sides share an origin.
- */
+export function isLocalUrl(url) {
+  return /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|192\.168\.|10\.)/i.test(String(url || ''));
+}
+
+export function normalizeUrl(raw) {
+  let u = String(raw || '').trim();
+  if (!u) return 'about:blank';
+  if (/^(about:|blob:|data:|https?:\/\/)/i.test(u)) return u;
+
+  // localhost or IP address (e.g. 127.0.0.1:8080, localhost:3000)
+  if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/.*)?$/i.test(u)) {
+    return 'http://' + u;
+  }
+
+  // Domain-like input without spaces (e.g. google.com, github.com/user)
+  if (!/\s/.test(u) && /^[a-z0-9-]+(\.[a-z0-9-]+)+([/?#].*)?$/i.test(u)) {
+    return 'https://' + u;
+  }
+
+  // Otherwise treat as search query (e.g. "google", "css grid")
+  const engine = getSettings().browserSearchEngine || 'google';
+  const q = encodeURIComponent(u);
+  if (engine === 'duckduckgo') return `https://duckduckgo.com/?q=${q}`;
+  if (engine === 'bing') return `https://www.bing.com/search?q=${q}`;
+  if (engine === 'brave') return `https://search.brave.com/search?q=${q}`;
+  return `https://www.google.com/search?q=${q}`;
+}
+
 export function sendToTab(tab, cmd, extra) {
   try {
     tab.iframe.contentWindow.postMessage({ ls: 1, cmd, ...(extra || {}) }, '*');
@@ -63,7 +92,7 @@ export function sendToTab(tab, cmd, extra) {
 function directWin(tab) {
   try {
     const w = tab.iframe?.contentWindow;
-    void w.document; // throws when cross-origin
+    void w.document;
     return w;
   } catch (_) {
     return null;
@@ -97,6 +126,7 @@ function onBridgeMessage(ev) {
   const tab = findTab(ev.source);
   if (!tab) return;
   tab.bridge = true;
+
   if (d.type === 'meta') {
     tab.loading = false;
     if (d.href && d.href !== 'about:blank') tab.url = d.href;
@@ -126,27 +156,33 @@ export function disposeBridge() {
   window.removeEventListener('message', onBridgeMessage);
 }
 
-/**
- * @param {HTMLElement} container  element that holds the iframes (device frame)
- * @param {string} url
- */
+function applyFramePolicy(iframe, url) {
+  // Apply sandbox only for local Live Server pages; external sites like Google break under sandbox
+  if (isLocalUrl(url) || url === 'about:blank' || url.startsWith('blob:')) {
+    iframe.setAttribute(
+      'sandbox',
+      'allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads'
+    );
+  } else {
+    iframe.removeAttribute('sandbox');
+  }
+}
+
 export function addTab(container, url, title) {
   const id = nextId++;
   const iframe = document.createElement('iframe');
   iframe.className = 'ls-browser-frame';
-  iframe.setAttribute(
-    'sandbox',
-    'allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads'
-  );
-  iframe.setAttribute('allow', 'fullscreen');
-  const startUrl = url || 'about:blank';
+  iframe.setAttribute('allow', 'fullscreen; clipboard-read; clipboard-write; geolocation; camera; microphone');
+
+  const startUrl = url ? normalizeUrl(url) : 'about:blank';
+  applyFramePolicy(iframe, startUrl);
   iframe.src = startUrl;
   container.appendChild(iframe);
 
   const tab = {
     id,
     url: startUrl,
-    title: title || (startUrl === 'about:blank' ? 'New tab' : startUrl),
+    title: title || (startUrl === 'about:blank' ? 'New tab' : startUrl.replace(/^https?:\/\//i, '')),
     iframe,
     loading: startUrl !== 'about:blank',
     favicon: null,
@@ -159,9 +195,13 @@ export function addTab(container, url, title) {
   });
   activeTabId = id;
 
+  if (startUrl !== 'about:blank') {
+    remember(startUrl, tab.title);
+  }
+
   iframe.addEventListener('load', () => {
     tab.loading = false;
-    tab.devtools = false; // new document
+    tab.devtools = false;
     const w = directWin(tab);
     if (w) {
       try {
@@ -175,7 +215,7 @@ export function addTab(container, url, title) {
         if (link?.href) tab.favicon = link.href;
       } catch (_) {}
     } else if (!tab.pinTitle && tab.url !== 'about:blank' && (!tab.title || tab.title === startUrl)) {
-      tab.title = tab.url.replace(/^https?:\/\//, ''); // bridge meta replaces this with the real title
+      tab.title = tab.url.replace(/^https?:\/\//, '');
     }
     if (!tab.favicon && /^https?:/i.test(tab.url)) {
       try {
@@ -238,22 +278,16 @@ export function closeAllTabs() {
   emit();
 }
 
-function normalizeUrl(url) {
-  let u = String(url || '').trim();
-  if (!u) return 'about:blank';
-  if (/^(about:|blob:|data:)/i.test(u)) return u;
-  if (!/^https?:\/\//i.test(u)) u = 'http://' + u;
-  return u;
-}
-
 export function navigateActive(url) {
   const t = getActiveTab();
   if (!t?.iframe) return;
   const u = normalizeUrl(url);
   t.url = u;
   t.loading = u !== 'about:blank';
-  if (u === 'about:blank') t.title = 'New tab';
+  t.title = u === 'about:blank' ? 'New tab' : u.replace(/^https?:\/\//i, '');
+  applyFramePolicy(t.iframe, u);
   t.iframe.src = u;
+  if (u !== 'about:blank') remember(u, t.title);
   emit();
 }
 
@@ -325,7 +359,6 @@ export function printActive() {
   return sendToTab(t, 'print');
 }
 
-/** Suger DevTool on/off for the active tab. Returns false when the page has no bridge. */
 export function toggleDevtoolsActive() {
   const t = getActiveTab();
   if (!t || !t.bridge) return false;
@@ -341,7 +374,6 @@ export function setZoomActive(pct) {
   return t.zoom;
 }
 
-/** Chrome-style tab strip */
 export function renderTabStrip(tabsEl) {
   if (!tabsEl) return;
   tabsEl.innerHTML = '';
@@ -383,6 +415,7 @@ export function renderTabStrip(tabsEl) {
       closeTab(t.id);
     });
     el.appendChild(x);
+
     el.addEventListener('click', () => activateTab(t.id));
     tabsEl.appendChild(el);
   });

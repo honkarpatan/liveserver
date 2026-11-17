@@ -1,10 +1,5 @@
 /**
- * Desktop-style dropdown menu (no dialogs).
- *  - anchored under the button that opened it
- *  - submenus fly out to the side (hover on mouse, tap on touch)
- *  - closes on outside click: a transparent backdrop covers the whole host,
- *    so clicks over iframes and inside Shadow DOM are caught too
- *  - closes on Escape or when an item is chosen
+ * Desktop-style dropdown menu with toggleable submenus.
  */
 import { svgIcon } from '../utils/svg.js';
 
@@ -27,13 +22,6 @@ export function isDropdownOpen() {
   return !!current;
 }
 
-/**
- * @param {object} o
- * @param {HTMLElement} o.host     element the menu is mounted in (the browser shell)
- * @param {HTMLElement} o.anchor   button the menu hangs from
- * @param {Array} o.items          { label, onClick, children, checked, disabled, separator }
- * @param {() => void} [o.onClose]
- */
 export function openDropdown({ host, anchor, items, onClose }) {
   closeDropdown();
   if (!host || !items?.length) return { close() {} };
@@ -76,23 +64,27 @@ export function openDropdown({ host, anchor, items, onClose }) {
     const mh = menu.offsetHeight;
     let left;
     let top;
+
     if (depth === 0) {
       top = rect.bottom - h.top + 2;
-      left = rect.right - h.left - w; // right edge aligned with the button
-      if (left < 4) left = rect.left - h.left; // button near the left edge
+      left = rect.right - h.left - w;
+      if (left < 4) left = rect.left - h.left;
     } else {
       top = rect.top - h.top - 4;
-      left = rect.right - h.left - 2; // fly out to the right
-      if (left + w > h.width - 4) left = rect.left - h.left - w + 2; // flip left
+      left = rect.right - h.left - 2;
+      if (left + w > h.width - 4) left = rect.left - h.left - w + 2;
     }
+
     if (left + w > h.width - 4) left = h.width - w - 4;
     if (left < 4) left = 4;
+
     const room = h.height - top - 4;
     if (mh > room && h.height) {
       if (depth > 0 && h.height - mh - 4 > 0) top = h.height - mh - 4;
       else menu.style.maxHeight = Math.max(room, 80) + 'px';
     }
     if (top < 4) top = 4;
+
     menu.style.left = left + 'px';
     menu.style.top = top + 'px';
   }
@@ -109,12 +101,12 @@ export function openDropdown({ host, anchor, items, onClose }) {
         return;
       }
       if (it.render) {
-        // free-form row (e.g. the zoom - 100% + row); it handles its own clicks
         const custom = mk('div', 'ls-dd-custom');
         it.render(custom, close);
         menu.appendChild(custom);
         return;
       }
+
       const row = mk('div', 'ls-dd-item' + (it.disabled ? ' is-disabled' : ''));
       row.setAttribute('role', 'menuitem');
 
@@ -138,6 +130,11 @@ export function openDropdown({ host, anchor, items, onClose }) {
         build(it.children, depth + 1, row.getBoundingClientRect());
       };
 
+      const closeChildren = () => {
+        closeFrom(depth + 1);
+        row.classList.remove('is-active');
+      };
+
       row.addEventListener('pointerenter', (e) => {
         if (e.pointerType && e.pointerType !== 'mouse') return;
         if (it.children) openChildren();
@@ -150,8 +147,13 @@ export function openDropdown({ host, anchor, items, onClose }) {
       row.addEventListener('click', (e) => {
         e.stopPropagation();
         if (it.disabled) return;
+        // Toggle submenu show/hide on click
         if (it.children) {
-          openChildren();
+          if (row.classList.contains('is-active') && menus.length > depth + 1) {
+            closeChildren();
+          } else {
+            openChildren();
+          }
           return;
         }
         close();
@@ -189,13 +191,10 @@ export function openDropdown({ host, anchor, items, onClose }) {
   return { close };
 }
 
-/**
- * Anchored popover with free-form content (opacity slider etc).
- * Same outside-click / Escape behaviour as the dropdown.
- */
 export function openPanel({ host, anchor, render, onClose }) {
   closeDropdown();
   if (!host) return { close() {} };
+
   const layer = mk('div', 'ls-dd-layer');
   const backdrop = mk('div', 'ls-dd-backdrop');
   const panel = mk('div', 'ls-dd-menu ls-dd-panel');
@@ -203,6 +202,7 @@ export function openPanel({ host, anchor, render, onClose }) {
   host.appendChild(layer);
 
   let closed = false;
+
   function close() {
     if (closed) return;
     closed = true;
@@ -215,12 +215,14 @@ export function openPanel({ host, anchor, render, onClose }) {
       onClose?.();
     } catch (_) {}
   }
+
   function onKey(e) {
     if (e.key === 'Escape') {
       e.stopPropagation();
       close();
     }
   }
+
   backdrop.addEventListener('click', (e) => {
     e.stopPropagation();
     close();

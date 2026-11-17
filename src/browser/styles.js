@@ -1,9 +1,8 @@
 /**
- * Browser CSS — desktop Chrome (Linux) look, dark + light.
+ * Browser CSS — desktop Chrome (Linux) look, dark + light, with Mozilla Firefox-style New Tab Page.
  * BROWSER_CSS is used twice:
  *  - injected into document.head (Acode Page mode)
  *  - passed to EditorFile `stylesheets` (editor tab = Shadow DOM, head styles don't apply)
- * Rules: radius <= 3px except true circles, no emoji.
  */
 export const BROWSER_CSS = `
 :host { display: block; position: relative; height: 100%; width: 100%; }
@@ -45,7 +44,6 @@ export const BROWSER_CSS = `
 .ls-tab-x:hover { background: var(--ls-press); }
 .ls-tabstrip .ls-spacer { flex: 1; }
 .ls-win { display: flex; align-items: center; align-self: center; gap: 2px; }
-
 .ls-ib {
   width: 32px; height: 32px; flex: none; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--ls-sub);
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
@@ -72,6 +70,18 @@ export const BROWSER_CSS = `
 .ls-progress::before { content: ""; position: absolute; top: 0; bottom: 0; width: 30%; background: var(--ls-accent); animation: ls-bar 1.1s ease-in-out infinite; }
 @keyframes ls-bar { 0% { left: -30%; } 100% { left: 100%; } }
 @keyframes ls-spin { to { transform: rotate(360deg); } }
+
+/* ---- external site fallback banner */
+.ls-ext-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 5px 10px; background: var(--ls-menu); border-bottom: 1px solid var(--ls-line);
+  font-size: 12px; color: var(--ls-sub);
+}
+.ls-ext-bar[hidden] { display: none; }
+.ls-ext-open {
+  border: 0; border-radius: 3px; padding: 4px 10px; background: #22c55e;
+  color: #052e16; font-weight: 600; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+}
 
 /* ---- device toolbar */
 .ls-devbar { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 3px 8px; background: var(--ls-toolbar); border-bottom: 1px solid var(--ls-line); overflow-x: auto; scrollbar-width: none; }
@@ -104,15 +114,99 @@ export const BROWSER_CSS = `
 .ls-hdl-b::after { left: calc(50% - 14px); top: 4px; height: 4px; width: 28px; }
 .ls-hdl-c::after { left: 4px; top: 4px; width: 4px; height: 4px; border-radius: 50%; }
 
-/* ---- new tab page */
-.ls-ntp { position: absolute; inset: 0; z-index: 2; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 16px; background: var(--ls-toolbar); color: var(--ls-text); }
+/* ---- new tab page (Mozilla Firefox style: large Green Fox top-center + search bar + round bookmarks + recent) */
+.ls-ntp {
+  position: absolute; inset: 0; z-index: 2; display: none; flex-direction: column;
+  align-items: center; justify-content: flex-start; gap: 20px; padding: 26px 16px 28px;
+  overflow-y: auto; background: var(--ls-toolbar); color: var(--ls-text);
+}
 .ls-ntp.is-on { display: flex; }
-.ls-ntp-title { font-size: 28px; font-weight: 400; letter-spacing: .2px; }
-.ls-ntp-tiles { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; max-width: 480px; }
-.ls-ntp-tile { width: 84px; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 4px; border: 0; border-radius: 3px; background: transparent; cursor: pointer; }
+.ls-ntp-hero {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; margin-top: 6px;
+}
+.ls-ntp-logo {
+  width: 92px; height: 92px; object-fit: contain; display: block;
+  filter: drop-shadow(0 6px 16px rgba(34, 197, 94, 0.25));
+}
+.ls-ntp-title {
+  font-size: 22px; font-weight: 600; letter-spacing: .3px;
+}
+.ls-ntp-search {
+  width: min(480px, 95%); height: 44px; border-radius: 8px;
+  background: var(--ls-omni); border: 1px solid var(--ls-line);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; color: var(--ls-sub);
+}
+.ls-ntp-search:focus-within {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.28);
+}
+.ls-ntp-search-ico {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.ls-ntp-search input {
+  flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent;
+  color: var(--ls-text); font: inherit; font-size: 14px;
+}
+.ls-ntp-search-btn {
+  height: 32px; padding: 0 14px; border: 0; border-radius: 6px;
+  background: #22c55e; color: #052e16; font-weight: 600; font-size: 12.5px;
+  cursor: pointer; flex-shrink: 0;
+}
+.ls-ntp-search-btn:active { opacity: 0.85; }
+.ls-ntp-tiles {
+  display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;
+  width: min(480px, 100%);
+}
+.ls-ntp-tile {
+  width: 78px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 8px 4px; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+}
 .ls-ntp-tile:hover { background: var(--ls-hover); }
-.ls-ntp-dot { width: 48px; height: 48px; border-radius: 50%; background: var(--ls-omni); color: var(--ls-text); display: flex; align-items: center; justify-content: center; font-size: 20px; }
-.ls-ntp-name { max-width: 80px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ls-text); }
+.ls-ntp-dot {
+  width: 48px; height: 48px; border-radius: 50%; background: var(--ls-omni);
+  border: 1px solid var(--ls-line); color: var(--ls-text);
+  display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 600;
+  overflow: hidden; flex-shrink: 0;
+}
+.ls-ntp-dot img { width: 24px; height: 24px; border-radius: 50%; object-fit: contain; }
+.ls-ntp-name {
+  max-width: 74px; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--ls-text);
+}
+.ls-ntp-recent-wrap {
+  width: min(480px, 100%); display: flex; flex-direction: column; gap: 6px;
+  border-top: 1px solid var(--ls-line); padding-top: 12px;
+}
+.ls-ntp-sec-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 4px 4px; font-size: 12px; font-weight: 600; color: var(--ls-sub);
+}
+.ls-ntp-more {
+  border: 0; background: transparent; color: #22c55e; font-size: 12px;
+  font-weight: 600; cursor: pointer; padding: 2px 6px; border-radius: 3px;
+}
+.ls-ntp-more:hover { background: var(--ls-hover); }
+.ls-ntp-recent-list { display: flex; flex-direction: column; gap: 2px; }
+.ls-ntp-recent-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer;
+}
+.ls-ntp-recent-row:hover { background: var(--ls-hover); }
+.ls-ntp-recent-ico {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--ls-omni);
+  border: 1px solid var(--ls-line); display: inline-flex; align-items: center;
+  justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0;
+}
+.ls-ntp-recent-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ls-ntp-recent-title {
+  font-size: 13px; color: var(--ls-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ls-ntp-recent-url {
+  font-size: 11px; color: var(--ls-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ls-ntp-empty { font-size: 12px; color: var(--ls-sub); padding: 8px 4px; }
 
 /* ---- find bar */
 .ls-find { position: absolute; top: 80px; right: 10px; z-index: 40; display: flex; align-items: center; gap: 2px; padding: 4px 6px; background: var(--ls-menu); border: 1px solid var(--ls-line); border-radius: 3px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
@@ -171,10 +265,9 @@ export const BROWSER_CSS = `
 .ls-switch.is-on::before { background: var(--ls-accent); }
 .ls-switch.is-on::after { transform: translateX(16px); background: #fff; }
 `;
-
 export function injectBrowserStyles() {
   const old = document.getElementById('ls-browser-styles');
-  if (old) return;
+  if (old) old.remove();
   const s = document.createElement('style');
   s.id = 'ls-browser-styles';
   s.textContent = BROWSER_CSS;

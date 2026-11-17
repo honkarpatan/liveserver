@@ -3,7 +3,6 @@
  * Uses Acode's EditorFile with type "custom": the shell element is passed as
  * `content` and is rendered inside the tab (Shadow DOM), so the stylesheet MUST
  * be passed via `stylesheets` — document.head styles do not reach it.
- * https://docs.acode.app/docs/editor-components/editor-file
  */
 let seq = 0;
 
@@ -20,7 +19,6 @@ function getEditorFileClass() {
 /**
  * @param {HTMLElement} el  browser shell element
  * @param {{title?: string, css?: string, onClose?: () => void}} [opts]
- * @returns {Promise<{close: () => void, file: any} | null>}  null = could not create a tab
  */
 export async function mountInEditorTab(el, opts = {}) {
   const EditorFile = getEditorFileClass();
@@ -33,7 +31,6 @@ export async function mountInEditorTab(el, opts = {}) {
   let file = null;
   const attempts = [
     { type: 'custom', content: el, stylesheets: opts.css ? [opts.css] : [], hideQuickTools: true, id, render: true },
-    // older builds: plain "page" type
     { type: 'page', content: el, stylesheets: opts.css ? [opts.css] : [], id, render: true },
   ];
   for (const o of attempts) {
@@ -67,9 +64,15 @@ export async function mountInEditorTab(el, opts = {}) {
 
   return {
     file,
+    show() {
+      if (done) return;
+      try {
+        file.makeActive?.();
+      } catch (_) {}
+    },
     close() {
       if (done) return;
-      done = true; // we are closing it ourselves — do not call onClose
+      done = true;
       try {
         file.remove?.(true);
       } catch (_) {
@@ -79,6 +82,6 @@ export async function mountInEditorTab(el, opts = {}) {
       }
     },
     onFullscreen() {},
-    setAppearance() {}, // overlay needs the Acode page; opacity is applied on the shell
+    setAppearance() {},
   };
 }

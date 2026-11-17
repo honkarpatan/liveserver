@@ -1,8 +1,8 @@
 /**
- * In-app browser — desktop Chrome look.
+ * In-app browser — desktop Chrome look with Mozilla Firefox-inspired New Tab Page.
  * Hosts:  inPage    -> real Acode Page          (pageHost.js)
  *         editorTab -> Acode EditorFile, custom (editorTab.js)
- * Extras: custom dropdown menu, device mode, opacity + overlay preview, find, bookmarks.
+ * Extras: custom dropdown menu, device mode, opacity + overlay preview, find, bookmarks, recent list.
  */
 import { getSettings, updateSetting } from '../core/settings.js';
 import { getActiveFile } from '../utils/paths.js';
@@ -29,7 +29,10 @@ import {
   getActiveTab,
   getTabs,
   getVisited,
+  clearVisited,
   onTabsChange,
+  normalizeUrl,
+  isLocalUrl,
 } from './tabManager.js';
 import { openBrowserMenu } from './menu.js';
 import { closeDropdown, isDropdownOpen } from './dropdown.js';
@@ -38,9 +41,12 @@ import { createDeviceMode } from './deviceMode.js';
 import { setFullscreen, exitFullscreen } from './fullscreen.js';
 import { mountInPage } from './pageHost.js';
 import { mountInEditorTab } from './editorTab.js';
+import { openInAcodeWebview } from './nativeWebview.js';
+
 
 const toast = acode.require('toast');
 
+const FOX_LOGO_URL = 'https://i.postimg.cc/WpYPQ47b/green-fox.png';
 const ZOOM_STOPS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
 const WEB_FILE = /\.(html?|css|js|mjs|json|svg|xml|txt|md)$/i;
 const WATCHED_KEYS = ['browserOpacity', 'browserOverlay', 'overlayAutoSave', 'showAddressBar'];
@@ -79,6 +85,23 @@ async function serverRootUrl() {
   if (st.url) return st.url.replace(/\/[^/]*$/, '/');
   if (st.port) return 'http://127.0.0.1:' + st.port + '/';
   return null;
+}
+
+function openUrlInSystemBrowser(u) {
+  if (!u || u === 'about:blank') return;
+  try {
+    if (window.cordova?.InAppBrowser?.open) {
+      window.cordova.InAppBrowser.open(u, '_system');
+      return;
+    }
+    if (window.cordova?.exec) {
+      window.cordova.exec(null, null, 'System', 'open-in-browser', [u]);
+      return;
+    }
+    window.open(u, '_blank', 'noopener');
+  } catch (_) {
+    toast(u, 2500);
+  }
 }
 
 // ---------------------------------------------------------------- appearance
@@ -158,6 +181,7 @@ function wireChrome(wrap) {
   const box = $('.ls-box');
   const device = $('.ls-device');
   const ntp = $('.ls-ntp');
+  const extBar = $('.ls-ext-bar');
   const urlInput = $('.ls-browser-url');
   const reloadBtn = $('.ls-reload');
   const starBtn = $('.ls-star');
@@ -167,6 +191,8 @@ function wireChrome(wrap) {
   const devBtn = $('.ls-dev-toggle');
   const find = $('.ls-find');
   const findInput = find.querySelector('input');
+
+  let showAllRecent = false;
 
   deviceMode = createDeviceMode({
     shell: wrap,
@@ -181,32 +207,199 @@ function wireChrome(wrap) {
 
   const focused = () => wrap.getRootNode().activeElement === urlInput;
 
+  const openTargetUrl = async (rawUrl) => {
+    const target = normalizeUrl(rawUrl);
+    if (!target || target === 'about:blank') return;
+
+    if (!isLocalUrl(target)) {
+      const extMode = getSettings().externalSiteMode || 'acodeWebview';
+      if (extMode === 'acodeWebview') {
+        await openInAcodeWebview(target);
+        return;
+      }
+      if (extMode === 'systemBrowser') {
+        openUrlInSystemBrowser(target);
+        return;
+      }
+    }
+
+    navigateActive(target);
+  };
+
   const renderNtp = () => {
     ntp.innerHTML = '';
-    const title = document.createElement('div');
-    title.className = 'ls-ntp-title';
-    title.textContent = 'Live Server';
+
+    // 1. Center-Top Large Firefox-style Green Fox Logo
+    const hero = document.createElement('div');
+    hero.className = 'ls-ntp-hero';
+
+    const logo = document.createElement('img');
+    logo.className = 'ls-ntp-logo';
+    logo.src = FOX_LOGO_URL;
+    logo.alt = 'Live Server';
+    logo.onerror = () => {
+      logo.style.display = 'none';
+    };
+    hero.appendChild(logo);
+
+    const brand = document.createElement('div');
+    brand.className = 'ls-ntp-title';
+    brand.textContent = 'Live Server';
+    hero.appendChild(brand);
+
+    // 2. Search Bar + Search Button below Logo
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'ls-ntp-search';
+
+    const searchIcon = document.createElement('span');
+    searchIcon.className = 'ls-ntp-search-ico';
+    searchIcon.innerHTML = icon(I.search, 17);
+
+    const ntpInput = document.createElement('input');
+    ntpInput.type = 'text';
+    ntpInput.placeholder = 'Search with Google or enter address';
+    ntpInput.setAttribute('spellcheck', 'false');
+    ntpInput.setAttribute('autocapitalize', 'off');
+    ntpInput.setAttribute('autocomplete', 'off');
+
+    const searchBtn = document.createElement('button');
+    searchBtn.type = 'button';
+    searchBtn.className = 'ls-ntp-search-btn';
+    searchBtn.title = 'Search';
+    searchBtn.textContent = 'Search';
+
+    const triggerNtpSearch = () => {
+      const q = ntpInput.value.trim();
+      if (!q) {
+        ntpInput.focus();
+        return;
+      }
+      openTargetUrl(q);
+    };
+
+    ntpInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') triggerNtpSearch();
+    });
+    searchBtn.addEventListener('click', triggerNtpSearch);
+
+    searchWrap.append(searchIcon, ntpInput, searchBtn);
+
+    // 3. Round Chrome/Firefox-style Bookmark Circles
     const tiles = document.createElement('div');
     tiles.className = 'ls-ntp-tiles';
-    const mkTile = (name, url, letter) => {
+
+    const mkTile = (name, url, letter, faviconUrl) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'ls-ntp-tile';
       b.innerHTML = '<span class="ls-ntp-dot"></span><span class="ls-ntp-name"></span>';
-      b.querySelector('.ls-ntp-dot').textContent = letter;
+      const dot = b.querySelector('.ls-ntp-dot');
+      if (faviconUrl && /^https?:/i.test(faviconUrl) && !isLocalUrl(faviconUrl)) {
+        const img = document.createElement('img');
+        img.src = faviconUrl;
+        img.alt = '';
+        img.onerror = () => {
+          dot.textContent = letter;
+        };
+        dot.appendChild(img);
+      } else {
+        dot.textContent = letter;
+      }
       b.querySelector('.ls-ntp-name').textContent = name;
       b.addEventListener('click', async () => {
         const u = typeof url === 'function' ? await url() : url;
-        if (u) navigateActive(u);
-        else toast('Server not running', 2000);
+        if (!u) return toast('Server not running', 2000);
+        openTargetUrl(u);
       });
       return b;
     };
-    tiles.appendChild(mkTile('Server root', serverRootUrl, 'S'));
-    bookmarks()
-      .slice(0, 8)
-      .forEach((m) => tiles.appendChild(mkTile(m.title || m.url, m.url, (m.title || m.url || '?').replace(/^https?:\/\//, '')[0].toUpperCase())));
-    ntp.append(title, tiles);
+
+    tiles.appendChild(mkTile('Server root', serverRootUrl, 'S', null));
+
+    bookmarks().forEach((m) => {
+      let fav = null;
+      try {
+        const hostName = new URL(m.url).hostname;
+        if (hostName && hostName !== '127.0.0.1' && hostName !== 'localhost') {
+          fav = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostName)}&sz=64`;
+        }
+      } catch (_) {}
+      const ch = (m.title || m.url || '?').replace(/^https?:\/\//, '')[0]?.toUpperCase() || 'B';
+      tiles.appendChild(mkTile(m.title || m.url, m.url, ch, fav));
+    });
+
+    const addTile = document.createElement('button');
+    addTile.type = 'button';
+    addTile.className = 'ls-ntp-tile';
+    addTile.innerHTML = `<span class="ls-ntp-dot">${icon(I.plus, 20)}</span><span class="ls-ntp-name">Add shortcut</span>`;
+    addTile.addEventListener('click', async () => {
+      const prompt = acode.require('prompt');
+      const rawUrl = await prompt('Bookmark URL (e.g. https://www.google.com)', 'https://', 'text');
+      if (!rawUrl) return;
+      const cleanUrl = normalizeUrl(rawUrl);
+      const name = (await prompt('Shortcut name', cleanUrl.replace(/^https?:\/\//, ''), 'text')) || cleanUrl;
+      const list = bookmarks();
+      updateSetting('browserBookmarks', [...list, { title: name.trim(), url: cleanUrl }]);
+      renderNtp();
+    });
+    tiles.appendChild(addTile);
+
+    // 4. Recent List Below Bookmarks (Max 5 + "More" at end right)
+    const recentWrap = document.createElement('div');
+    recentWrap.className = 'ls-ntp-recent-wrap';
+
+    const allVisited = getVisited();
+    const secHead = document.createElement('div');
+    secHead.className = 'ls-ntp-sec-head';
+
+    const secTitle = document.createElement('span');
+    secTitle.textContent = 'Recent';
+    secHead.appendChild(secTitle);
+
+    if (allVisited.length > 0) {
+      const moreBtn = document.createElement('button');
+      moreBtn.type = 'button';
+      moreBtn.className = 'ls-ntp-more';
+      moreBtn.textContent = showAllRecent ? 'Less' : 'More';
+      moreBtn.addEventListener('click', () => {
+        showAllRecent = !showAllRecent;
+        renderNtp();
+      });
+      secHead.appendChild(moreBtn);
+    }
+    recentWrap.appendChild(secHead);
+
+    const recentList = document.createElement('div');
+    recentList.className = 'ls-ntp-recent-list';
+    const visibleItems = showAllRecent ? allVisited : allVisited.slice(0, 5);
+
+    if (!visibleItems.length) {
+      const empty = document.createElement('div');
+      empty.className = 'ls-ntp-empty';
+      empty.textContent = 'No recent pages yet';
+      recentList.appendChild(empty);
+    } else {
+      visibleItems.forEach((item) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'ls-ntp-recent-row';
+        const initial = (item.title || item.url || '?').replace(/^https?:\/\//, '')[0]?.toUpperCase() || 'W';
+        row.innerHTML = `
+          <span class="ls-ntp-recent-ico">${initial}</span>
+          <span class="ls-ntp-recent-meta">
+            <span class="ls-ntp-recent-title"></span>
+            <span class="ls-ntp-recent-url"></span>
+          </span>
+        `;
+        row.querySelector('.ls-ntp-recent-title').textContent = item.title || item.url;
+        row.querySelector('.ls-ntp-recent-url').textContent = item.url;
+        row.addEventListener('click', () => openTargetUrl(item.url));
+        recentList.appendChild(row);
+      });
+    }
+    recentWrap.appendChild(recentList);
+
+    ntp.append(hero, searchWrap, tiles, recentWrap);
   };
 
   const sync = () => {
@@ -221,11 +414,19 @@ function wireChrome(wrap) {
     siteBtn.title = secure ? 'Connection is secure' : 'Not secure';
     const marked = !!t && bookmarks().some((b) => b.url === t.url);
     starBtn.classList.toggle('is-on', marked);
+
     const blank = !t || t.url === 'about:blank';
     if (blank) renderNtp();
     ntp.classList.toggle('is-on', blank);
+
+    if (extBar) {
+      const isExt = !blank && /^https?:\/\//i.test(t.url) && !isLocalUrl(t.url);
+      extBar.hidden = !isExt;
+    }
+
     if (!getTabs().length) hideBrowser();
   };
+
   unsubTabs?.();
   unsubTabs = onTabsChange(sync);
 
@@ -235,9 +436,9 @@ function wireChrome(wrap) {
   };
 
   const newTab = () => {
+    showAllRecent = false;
     addTab(device, 'about:blank');
     activateTab(getActiveTab()?.id);
-    urlInput?.focus();
   };
 
   const nextZoom = (cur, dir) => {
@@ -252,7 +453,10 @@ function wireChrome(wrap) {
     if (!t || t.url === 'about:blank') return toast('Nothing to bookmark', 1500);
     const list = bookmarks();
     const has = list.some((b) => b.url === t.url);
-    updateSetting('browserBookmarks', has ? list.filter((b) => b.url !== t.url) : [...list, { title: t.title || t.url, url: t.url }]);
+    updateSetting(
+      'browserBookmarks',
+      has ? list.filter((b) => b.url !== t.url) : [...list, { title: t.title || t.url, url: t.url }]
+    );
     sync();
     toast(has ? 'Bookmark removed' : 'Bookmarked', 1200);
   };
@@ -283,9 +487,14 @@ function wireChrome(wrap) {
         .filter((t) => t.id !== cur?.id)
         .forEach((t) => closeTab(t.id));
     },
-    navigate: (u) => navigateActive(u),
+    navigate: (u) => openTargetUrl(u),
     getUrl: () => getActiveTab()?.url || '',
     getVisited,
+    clearHistory: () => {
+      clearVisited();
+      renderNtp();
+      toast('History cleared', 1500);
+    },
     getBookmarks: bookmarks,
     isBookmarked: () => {
       const t = getActiveTab();
@@ -311,7 +520,8 @@ function wireChrome(wrap) {
     toggleDevtools: () => {
       const t = getActiveTab();
       if (!t || t.url === 'about:blank') return toast('Open a page first', 1800);
-      if (!toggleDevtoolsActive()) toast('DevTools work on pages served by Live Server (restart the server once to update it)', 3500);
+      if (!toggleDevtoolsActive())
+        toast('DevTools work on pages served by Live Server (restart the server once to update it)', 3500);
     },
     isDeviceMode: () => deviceMode.isOn(),
     toggleDeviceMode: () => deviceMode.toggle(),
@@ -328,12 +538,7 @@ function wireChrome(wrap) {
     },
     openExternal: () => {
       const u = getActiveTab()?.url;
-      if (!u || u === 'about:blank') return;
-      try {
-        (window.cordova?.InAppBrowser?.open || window.open).call(window, u, '_system');
-      } catch (_) {
-        toast(u, 2500);
-      }
+      if (u && u !== 'about:blank') openUrlInSystemBrowser(u);
     },
     openOpacity,
     isOverlay: overlayOn,
@@ -350,6 +555,11 @@ function wireChrome(wrap) {
   $('.ls-fwd')?.addEventListener('click', () => historyActive(1));
   reloadBtn.addEventListener('click', () => (getActiveTab()?.loading ? stopActive() : reloadActive()));
   $('.ls-home')?.addEventListener('click', async () => {
+    const customHome = String(getSettings().browserHomeUrl || '').trim();
+    if (customHome) {
+      openTargetUrl(customHome);
+      return;
+    }
     const u = await serverRootUrl();
     if (u) navigateActive(u);
     else toast('Server not running', 2000);
@@ -362,10 +572,14 @@ function wireChrome(wrap) {
   });
   devBtn.classList.toggle('is-on', deviceMode.isOn());
   menuBtn.addEventListener('click', () => openBrowserMenu(menuApi(), { host: wrap, anchor: menuBtn }));
+  $('.ls-ext-open')?.addEventListener('click', () => {
+    const u = getActiveTab()?.url;
+    if (u && u !== 'about:blank') openInAcodeWebview(u);
+  });
 
   urlInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      navigateActive(urlInput.value);
+      openTargetUrl(urlInput.value);
       urlInput.blur();
     }
   });
@@ -416,6 +630,10 @@ function createChrome() {
         <div class="ls-progress"></div>
       </div>
       <div class="ls-devbar" hidden></div>
+      <div class="ls-ext-bar" hidden>
+        <span>External site — if blocked inside frame, open externally</span>
+        <button type="button" class="ls-ext-open">Open in Browser ↗</button>
+      </div>
     </div>
     <div class="ls-stage">
       <div class="ls-ntp"></div>
@@ -456,7 +674,11 @@ function onHostClosed() {
 }
 
 async function mountShell() {
-  if (shellEl?.isConnected) return shellEl;
+  if (shellEl && host) {
+    host.show?.();
+    requestAnimationFrame(() => deviceMode?.layout());
+    return shellEl;
+  }
   if (mounting) return mounting;
   mounting = (async () => {
     injectBrowserStyles();
@@ -472,7 +694,6 @@ async function mountShell() {
     host = h;
     shellEl = el;
     initBridge();
-
     settingsListener = (ev) => {
       if (WATCHED_KEYS.includes(ev?.detail?.key)) applyAppearance();
     };
@@ -487,22 +708,30 @@ async function mountShell() {
 }
 
 /**
- * @param {string} url
- * @param {{reuse?: boolean}} [opts]  reuse: navigate/reload an existing tab of the same server
+ * @param {string} [url]
+ * @param {{reuse?: boolean, restoreOnly?: boolean, forceReload?: boolean}} [opts]
  */
 export async function openBrowser(url, opts = {}) {
-  const u = url || 'about:blank';
   const shell = await mountShell();
   const tabsNow = getTabs();
+
+  // If tabs are already open and restoreOnly is set (or no URL passed), keep all tabs & state untouched
+  if (tabsNow.length > 0 && (opts.restoreOnly || !url)) {
+    return;
+  }
+
+  const u = url || 'about:blank';
+
   if (opts.reuse) {
     const same = tabsNow.find((t) => sameOrigin(t.url, u));
     if (same) {
       activateTab(same.id);
-      if (same.url === u) reloadActive();
-      else navigateActive(u);
+      if (same.url !== u) navigateActive(u);
+      else if (opts.forceReload) reloadActive();
       return;
     }
   }
+
   const existing = getActiveTab();
   if (existing && existing.url === 'about:blank' && tabsNow.length === 1) {
     navigateActive(u);
@@ -516,7 +745,7 @@ export function hideBrowser(opts = {}) {
   closing = true;
   try {
     closeDropdown();
-    unsubTabs?.(); // before closeAllTabs: its emit() must not re-enter here
+    unsubTabs?.();
     unsubTabs = null;
     if (settingsListener) window.removeEventListener('liveserver-settings', settingsListener);
     settingsListener = null;

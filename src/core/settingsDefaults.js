@@ -12,6 +12,10 @@ export const defaultSettings = {
 
   // Browser
   browserDisplayMode: 'inPage', // inPage | editorTab
+  browserSearchEngine: 'google', // google | duckduckgo | bing | brave
+  // externalSiteMode: 'inApp', // inApp | systemBrowser
+  externalSiteMode: 'acodeWebview', // acodeWebview | inApp | systemBrowser
+  browserHomeUrl: '', // empty = Live Server root URL
   showSideButton: true,
   browserOpacity: 1, // 0.1 - 1.0
   browserOverlay: false, // preview as overlay: page is see-through and the editor underneath stays usable

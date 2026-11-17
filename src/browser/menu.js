@@ -104,15 +104,28 @@ export function openBrowserMenu(api, where) {
     {
       label: 'History',
       children: history.length
-        ? history.slice(0, 15).map((h) => ({ label: short(h.title || h.url), onClick: () => api.navigate?.(h.url) }))
+        ? [
+            ...history.slice(0, 15).map((h) => ({
+              label: short(h.title || h.url),
+              onClick: () => api.navigate?.(h.url),
+            })),
+            { separator: true },
+            { label: 'Clear history', onClick: () => api.clearHistory?.() },
+          ]
         : [{ label: 'No history yet', disabled: true }],
     },
     {
       label: 'Bookmarks',
       children: [
-        { label: marked ? 'Remove bookmark for this tab' : 'Bookmark this tab', onClick: () => api.toggleBookmark?.() },
+        {
+          label: marked ? 'Remove bookmark for this tab' : 'Bookmark this tab',
+          onClick: () => api.toggleBookmark?.(),
+        },
         ...(marks.length ? [{ separator: true }] : []),
-        ...marks.map((b) => ({ label: short(b.title || b.url), onClick: () => api.navigate?.(b.url) })),
+        ...marks.map((b) => ({
+          label: short(b.title || b.url),
+          onClick: () => api.navigate?.(b.url),
+        })),
       ],
     },
     { separator: true },

@@ -15,7 +15,7 @@ export const ACTIONS = [
   ['stop', 'Stop server'],
   ['restart', 'Restart server'],
   ['open', 'Open browser'],
-  ['root', 'Select root folder…'],
+  ['root', 'Select root folder'],
   ['status', 'Show server status'],
   ['deps', 'Check dependencies'],
   ['reinstall', 'Reinstall dependencies'],
@@ -33,7 +33,14 @@ export const SCHEMA = [
   },
 
   // ---- General
-  { key: 'port', category: 'General', text: 'Port', info: 'Default 8080', prompt: 'Port number', promptType: 'number' },
+  {
+    key: 'port',
+    category: 'General',
+    text: 'Port',
+    info: 'Default 8080',
+    prompt: 'Port number',
+    promptType: 'number',
+  },
   {
     key: 'bindAddress',
     category: 'General',
@@ -51,8 +58,18 @@ export const SCHEMA = [
     prompt: 'Absolute folder path',
     promptType: 'text',
   },
-  { key: 'liveReload', category: 'General', text: 'Live reload on save', checkbox: true },
-  { key: 'openBrowserOnStart', category: 'General', text: 'Open browser on start', checkbox: true },
+  {
+    key: 'liveReload',
+    category: 'General',
+    text: 'Live reload on save',
+    checkbox: true,
+  },
+  {
+    key: 'openBrowserOnStart',
+    category: 'General',
+    text: 'Open browser on start',
+    checkbox: true,
+  },
   {
     key: 'autoShutdownMinutes',
     category: 'General',
@@ -72,6 +89,37 @@ export const SCHEMA = [
       ['inPage', 'Acode page (default)'],
       ['editorTab', 'Editor tab'],
     ],
+  },
+  {
+    key: 'browserSearchEngine',
+    category: 'Browser',
+    text: 'Search engine',
+    info: 'Used when searching keywords in address bar or New Tab',
+    select: [
+      ['google', 'Google'],
+      ['duckduckgo', 'DuckDuckGo'],
+      ['bing', 'Bing'],
+      ['brave', 'Brave Search'],
+    ],
+  },
+  {
+  key: 'externalSiteMode',
+  category: 'Browser',
+  text: 'External websites',
+  info: 'Acode WebView bypasses Google/site iframe blocks',
+  select: [
+    ['acodeWebview', 'Acode Native WebView (Recommended)'],
+    ['inApp', 'In-app frame (local/embeddable sites)'],
+    ['systemBrowser', 'Chrome / External system browser'],
+  ],
+},
+  {
+    key: 'browserHomeUrl',
+    category: 'Browser',
+    text: 'Home button URL',
+    info: 'Empty = Live Server root URL',
+    prompt: 'Home URL (leave empty for server root)',
+    promptType: 'text',
   },
   {
     key: 'browserOpacity',
@@ -95,13 +143,50 @@ export const SCHEMA = [
     info: 'Saves the file after you stop typing so the preview updates live',
     checkbox: true,
   },
-  { key: 'showAddressBar', category: 'Browser', text: 'Show address bar', checkbox: true },
-  { key: 'showSideButton', category: 'Browser', text: 'Show side button', checkbox: true },
+  {
+    key: 'showAddressBar',
+    category: 'Browser',
+    text: 'Show address bar',
+    checkbox: true,
+  },
+  {
+    key: 'showSideButton',
+    category: 'Browser',
+    text: 'Show side button',
+    checkbox: true,
+  },
+  {
+    key: '__browserAction',
+    category: 'Browser',
+    text: 'Browser data',
+    info: 'Clear recent history or saved bookmarks',
+    select: [
+      ['clearHistory', 'Clear recent history'],
+      ['clearBookmarks', 'Clear all bookmarks'],
+    ],
+    noValue: true,
+  },
 
   // ---- HTML / static
-  { key: 'directoryListing', category: 'HTML / static', text: 'Enable directory listing', checkbox: true },
-  { key: 'enableCors', category: 'HTML / static', text: 'Enable CORS', checkbox: true },
-  { key: 'customCharset', category: 'HTML / static', text: 'Custom charset', prompt: 'Charset', promptType: 'text' },
+  {
+    key: 'directoryListing',
+    category: 'HTML / static',
+    text: 'Enable directory listing',
+    checkbox: true,
+  },
+  {
+    key: 'enableCors',
+    category: 'HTML / static',
+    text: 'Enable CORS',
+    checkbox: true,
+  },
+  {
+    key: 'customCharset',
+    category: 'HTML / static',
+    text: 'Custom charset',
+    prompt: 'Charset',
+    promptType: 'text',
+  },
   {
     key: 'customHeaders',
     category: 'HTML / static',
@@ -112,7 +197,12 @@ export const SCHEMA = [
   },
 
   // ---- Security
-  { key: 'bindLocalhostOnly', category: 'Security', text: 'Prefer localhost bind', checkbox: true },
+  {
+    key: 'bindLocalhostOnly',
+    category: 'Security',
+    text: 'Prefer localhost bind',
+    checkbox: true,
+  },
   {
     key: 'ipWhitelist',
     category: 'Security',
@@ -121,7 +211,13 @@ export const SCHEMA = [
     prompt: 'IP whitelist',
     promptType: 'textarea',
   },
-  { key: 'basicAuthUser', category: 'Security', text: 'Basic auth user', prompt: 'User name', promptType: 'text' },
+  {
+    key: 'basicAuthUser',
+    category: 'Security',
+    text: 'Basic auth user',
+    prompt: 'User name',
+    promptType: 'text',
+  },
   {
     key: 'basicAuthPass',
     category: 'Security',
@@ -178,7 +274,7 @@ async function runAction(id) {
       const s = st.getServerStatus();
       if (!s.running) return toast('Server is not running', 2000);
       const b = await import('../browser/index.js');
-      return b.openBrowser(s.url || 'http://127.0.0.1:' + s.port + '/');
+      return b.openBrowser(s.url || 'http://127.0.0.1:' + s.port + '/', { restoreOnly: true });
     }
     if (id === 'root') {
       const m = await import('../server/rootFolder.js');
@@ -187,7 +283,7 @@ async function runAction(id) {
     if (id === 'status') {
       const st = await import('../server/status.js');
       const s = st.getServerStatus();
-      return toast(s.running ? (s.url || '') + ' · port ' + s.port : 'Not running', 3000);
+      return toast(s.running ? (s.url || '') + ' — port ' + s.port : 'Not running', 3000);
     }
     if (id === 'deps') {
       const m = await import('../deps/dependencyChecker.js');
@@ -208,6 +304,23 @@ export async function handleSettingChange(key, value) {
     await runAction(value);
     return true;
   }
+
+  if (key === '__browserAction') {
+    try {
+      if (value === 'clearHistory') {
+        const m = await import('../browser/tabManager.js');
+        m.clearVisited();
+        toast('Browser history cleared', 1800);
+      } else if (value === 'clearBookmarks') {
+        updateSetting('browserBookmarks', []);
+        toast('Bookmarks cleared', 1800);
+      }
+    } catch (e) {
+      toast(String(e?.message || e), 2500);
+    }
+    return true;
+  }
+
   let v = value;
   if (key === 'port') {
     const n = parseInt(String(value), 10);
@@ -223,11 +336,11 @@ export async function handleSettingChange(key, value) {
       return false;
     }
     v = n;
-  }
-  else if (key === 'browserOpacity') {
+  } else if (key === 'browserOpacity') {
     const n = parseFloat(String(value));
     v = Number.isFinite(n) ? Math.min(1, Math.max(0.1, Math.round(n * 100) / 100)) : 1;
   }
+
   updateSetting(key, v);
 
   if (key === 'showSideButton') {
@@ -264,6 +377,7 @@ export function buildNativeSettings() {
     }
     return o;
   });
+
   return {
     list,
     cb: (key, value) => {
