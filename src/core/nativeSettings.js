@@ -138,6 +138,13 @@ export const SCHEMA = [
     select: ['0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1'].map((v) => [v, v]),
   },
   {
+    key: 'enablePinchToZoom',
+    category: 'Browser',
+    text: 'Pinch to zoom',
+    info: 'Two-finger zoom, drag to pan, double-tap to reset (served pages reload when toggled)',
+    checkbox: true,
+  },
+  {
     key: 'browserOverlay',
     category: 'Browser',
     text: 'Preview as overlay',
@@ -378,6 +385,12 @@ export async function handleSettingChange(key, value) {
     try {
       const m = await import('../ui/sideButton.js');
       m.setLiveDot?.(null); // refresh from status
+    } catch (_) {}
+  }
+  if (key === 'enablePinchToZoom') {
+    try {
+      const m = await import('../browser/tabManager.js');
+      m.applyPinchAll?.();
     } catch (_) {}
   }
   if (key === 'showSideButton') {

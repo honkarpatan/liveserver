@@ -23,6 +23,7 @@ export const defaultSettings = {
   sideButtonOfflineLabel: 'Go Live',
   browserOpacity: 1, // 0.1 - 1.0
   browserOverlay: false,
+  enablePinchToZoom: true,
   overlayAutoSave: true,
   browserBookmarks: [],
   browserDevice: { on: false, id: 'responsive', w: 390, h: 844, zoom: 'fit' },

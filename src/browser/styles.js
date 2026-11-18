@@ -57,6 +57,37 @@ export const BROWSER_CSS = `
 .ls-ib.ls-win-btn { width: 26px; height: 26px; }
 
 .ls-toolbar { position: relative; display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 6px; background: var(--ls-toolbar); border-bottom: 1px solid var(--ls-line); }
+/* ---- omnibox focus: nav buttons rise out one after another (each starts at 80% of the previous).
+   The url bar growth is ONE continuous width animation of the whole nav group (not per button),
+   so it glides instead of moving in steps. */
+.ls-nav { display: flex; align-items: center; flex: none; height: 100%; overflow: hidden; width: 136px; transition: width 680ms cubic-bezier(.45, 0, .25, 1); }
+.ls-toolbar.is-omni .ls-nav { width: 0; }
+.ls-nav .ls-ib {
+  --ls-d: 0ms; margin-right: 2px;
+  transition:
+    transform 200ms cubic-bezier(.3, 0, .2, 1) var(--ls-d),
+    opacity 160ms ease var(--ls-d),
+    background-color 120ms ease,
+    visibility 0s linear var(--ls-d);
+}
+/* unfocus: reverse order - back comes down first, home last */
+.ls-nav .ls-back { --ls-d: 0ms; }
+.ls-nav .ls-fwd { --ls-d: 160ms; }
+.ls-nav .ls-reload { --ls-d: 320ms; }
+.ls-nav .ls-home { --ls-d: 480ms; }
+.ls-toolbar.is-omni .ls-nav .ls-ib {
+  transform: translateY(-140%); opacity: 0; pointer-events: none; visibility: hidden;
+  transition:
+    transform 200ms cubic-bezier(.3, 0, .2, 1) var(--ls-d),
+    opacity 160ms ease var(--ls-d),
+    visibility 0s linear calc(var(--ls-d) + 240ms);
+}
+/* focus: home rises first, then reload, forward, back */
+.ls-toolbar.is-omni .ls-nav .ls-home { --ls-d: 0ms; }
+.ls-toolbar.is-omni .ls-nav .ls-reload { --ls-d: 160ms; }
+.ls-toolbar.is-omni .ls-nav .ls-fwd { --ls-d: 320ms; }
+.ls-toolbar.is-omni .ls-nav .ls-back { --ls-d: 480ms; }
+@media (prefers-reduced-motion: reduce) { .ls-nav, .ls-nav .ls-ib, .ls-toolbar.is-omni .ls-nav .ls-ib { transition: none; } }
 .ls-omni { flex: 1; min-width: 0; height: 30px; margin: 0 6px; display: flex; align-items: center; gap: 2px; padding: 0 2px 0 4px; border-radius: 3px; background: var(--ls-omni); }
 .ls-omni:focus-within { box-shadow: inset 0 0 0 2px var(--ls-accent); }
 .ls-site { width: 24px; height: 24px; flex: none; border: 0; border-radius: 50%; background: transparent; color: var(--ls-sub); display: inline-flex; align-items: center; justify-content: center; padding: 0; }

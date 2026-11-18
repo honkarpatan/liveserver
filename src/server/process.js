@@ -31,7 +31,7 @@ async function checkServerCapabilities(port, timeoutMs = 900) {
     clearTimeout(to);
     if (!res || !res.ok) return { alive: false, proxy: false };
     const data = await res.json().catch(() => ({}));
-    return { alive: true, proxy: data?.proxy === true };
+    return { alive: true, proxy: data?.proxy === true && (data?.proxyVersion || 0) >= 5 };
   } catch (_) {
     return { alive: false, proxy: false };
   }
@@ -310,6 +310,7 @@ async function patchSetup(port, root, fileName) {
     fileName: fileName || 'index.html',
     port,
     liveReload: s.liveReload !== false,
+    zoom: s.enablePinchToZoom !== false,
     directoryListing: s.directoryListing !== false,
     enableCors: s.enableCors !== false,
     charset: s.customCharset || 'utf-8',

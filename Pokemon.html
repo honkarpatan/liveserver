@@ -1,11 +1,326 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Document</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Suger DevTool - The Ultimate Mobile Inspector</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #111;
+            --accent: #0070f3;
+            --accent-hover: #0051a2;
+            --gray: #666;
+            --light-gray: #fafafa;
+            --border: #eaeaea;
+            --success: #28a745;
+            --shadow: rgba(0, 0, 0, 0.08);
+            --upi-bg: #f8f9fa;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #432424ff;
+                --text: #fff;
+                --gray: #999;
+                --light-gray: #111;
+                --border: #333;
+                --shadow: rgba(255, 255, 255, 0.08);
+                --upi-bg: #1a1a1a;
+            }
+        }
+
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 0 20px; }
+
+        /* Header */
+        nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 100; }
+        .logo { font-weight: 800; font-size: 22px; display: flex; align-items: center; gap: 0px; letter-spacing: -0.5px;  }
+        .logo img{
+          margin-bottom:5px;
+        }
+        .contact-btn { text-decoration: none; color: var(--text); font-size: 14px; font-weight: 600; border: 1px solid var(--border); padding: 10px 20px; border-radius: 50px; transition: 0.2s; }
+        .contact-btn:hover { border-color: var(--text); background: var(--light-gray); }
+
+        /* Hero */
+        .hero { text-align: center; padding: 120px 0 80px; }
+        h1 { font-size: 4rem; font-weight: 800; letter-spacing: -0.04em; line-height: 1.1; margin-bottom: 25px; background: linear-gradient(180deg, var(--text) 0%, var(--gray) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .subtitle { font-size: 1.35rem; color: var(--gray); max-width: 650px; margin: 0 auto 45px; font-weight: 400; }
+        .cta-btn { background: #249; color: white; text-decoration: none; padding: 16px 45px; border-radius: 1px; font-weight: 600; font-size: 1.1rem; transition: all 0.2s ease; display: inline-block; box-shadow: 0 10px 40px -10px var(--accent); cursor: pointer; border: none; }
+        .cta-btn:hover { transform: translateY(-2px); box-shadow: 0 20px 40px -10px var(--accent); background: var(--accent-hover); }
+
+        /* Features & Pricing (Simplified for brevity, use previous styles) */
+        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 25px; padding: 60px 0; }
+        .feature-card { background: var(--light-gray); border: 1px solid var(--border); padding: 35px; border-radius: 16px; transition: 0.3s; box-shadow: 0 4px 6px var(--shadow); }
+        .feature-card:hover { border-color: var(--accent); transform: translateY(-5px); }
+        .feature-icon { font-size: 28px; margin-bottom: 15px; display: inline-block; background: var(--bg); padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
+        .feature-title { font-weight: 700; font-size: 19px; margin-bottom: 10px; display: block; }
+        .feature-desc { color: var(--gray); font-size: 15px; line-height: 1.6; }
+
+        .pricing { text-align: center; padding: 80px 0 120px; }
+        .price-tag { font-size: 5rem; font-weight: 800; display: flex; align-items: flex-start; justify-content: center; gap: 5px; letter-spacing: -2px; }
+        .currency { font-size: 2rem; margin-top: 15px; }
+        .price-sub { color: var(--gray); margin-bottom: 40px; font-size: 1.1rem; }
+
+        /* Modal */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); display: none; align-items: center; justify-content: center; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
+        .modal { background: var(--bg); width: 420px; border-radius: 20px; padding: 35px; text-align: center; border: 1px solid var(--border); transform: scale(0.9); transition: transform 0.3s; position: relative; max-height: 90vh; overflow-y: auto; }
+        .modal h2 { margin-top: 0; margin-bottom: 8px; font-size: 24px; }
+        .modal p { font-size: 14px; color: var(--gray); margin-bottom: 20px; }
+        .close-btn { position: absolute; top: 20px; right: 20px; cursor: pointer; font-size: 22px; color: var(--gray); transition: 0.2s; }
+        .close-btn:hover { color: var(--text); }
+
+        /* --- UPI Section Styles --- */
+        .divider { display: flex; align-items: center; text-align: center; color: var(--gray); font-size: 12px; margin: 20px 0; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+        .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border); }
+        .divider::before { margin-right: 10px; } .divider::after { margin-left: 10px; }
+
+        .upi-box { background: var(--upi-bg); border: 1px solid var(--border); border-radius: 12px; padding: 15px; margin-bottom: 20px; display: flex; flex-direction: column; align-items: center; }
+        .upi-title { font-weight: 700; font-size: 14px; margin-bottom: 10px; color: var(--text); }
+        .qr-code { width: 120px; height: 120px; border-radius: 8px; border: 4px solid #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 10px; }
+        .upi-id-container { display: flex; align-items: center; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; width: 100%; box-sizing: border-box; justify-content: space-between; }
+        .upi-id { font-family: monospace; font-size: 13px; color: var(--text); }
+        .copy-btn { background: none; border: none; cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
+        .upi-instruction { font-size: 11px; color: var(--gray); margin-top: 8px; line-height: 1.4; }
+        .telegram-link { color: #24A1DE; text-decoration: none; font-weight: bold; }
+
+        /* Forms */
+        .input-group { margin-bottom: 15px; text-align: left; }
+        .step-label { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--gray); display: block; margin-bottom: 8px; }
+        .form-input { width: 100%; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--light-gray); color: var(--text); font-size: 15px; box-sizing: border-box; transition: 0.2s; }
+        .form-input:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+        .confirm-btn { width: 100%; padding: 14px; background: var(--accent); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 15px; transition: 0.2s; margin-top: 10px; }
+        .confirm-btn:hover { background: var(--accent-hover); }
+        .confirm-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        /* Success */
+        .success-view { display: none; flex-direction: column; align-items: center; }
+        .success-icon { width: 70px; height: 70px; background: var(--success); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; margin-bottom: 20px; }
+
+        @media (max-width: 600px) { h1 { font-size: 3rem; } .modal { width: 90%; padding: 25px; } }
+    </style>
 </head>
 <body>
-  bulbasor pokemons
+
+        <div class="container">
+        <nav>
+            <div class="logo">
+                <img width="28px"height="28px" src="https://i.postimg.cc/0NPf46yp/Picsart-25-11-22-08-13-55-109.png" />
+                Suger Dev Tool.
+            </div>
+            <a href="https://t.me/cosmodec" target="_blank" class="contact-btn">Contact Support</a>
+        </nav>
+
+        <section class="hero">
+            <h1>Master Mobile Web<br>Debugging.</h1>
+            <p class="subtitle">Professional-grade inspector, debugger, and network interceptor right in your mobile browser.</p>
+            <button class="cta-btn" onclick="openModal()">Get License - $5.99</button>
+        </section>
+
+        <section class="features">
+            <div class="feature-card">
+                <span class="feature-icon">🎨</span>
+                <span class="feature-title">Advanced Element Inspector</span>
+                <span class="feature-desc">Live DOM manipulation with <b>Computed Box Model</b> preview. Edit styles in real-time with advanced CSS management and property toggles.</span>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-icon">🐞</span>
+                <span class="feature-title">Professional JS Debugger</span>
+                <span class="feature-desc">Full control over script execution. Pause, resume, and navigate call stacks with <b>Step Over, Step Into, and Step Out</b> capabilities.</span>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-icon">⚡</span>
+                <span class="feature-title">Intelligent Console</span>
+                <span class="feature-desc">Execute code faster with <b>Eager Evaluation</b> (Live Preview) and smart <b>Autocomplete</b> for variables, functions, and properties.</span>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-icon">📡</span>
+                <span class="feature-title">Network Interceptor</span>
+                <span class="feature-desc">Monitor XHR/Fetch requests with detailed timing charts. Block URLs, simulate offline mode, and debug API responses on the fly.</span>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-icon">📂</span>
+                <span class="feature-title">Source & Filesystem</span>
+                <span class="feature-desc">Browse page resources, formatted source code, and set breakpoints directly within your mobile environment.</span>
+            </div>
+
+            <div class="feature-card">
+                <span class="feature-icon">🔒</span>
+                <span class="feature-title">Secure Cloud License</span>
+                <span class="feature-desc">Instant activation with cloud-based verification. Your license is uniquely tied to you, ensuring maximum security.</span>
+            </div>
+        </section>
+
+        <section class="pricing">
+            <h2>Simple Pricing</h2>
+            <div class="price-tag">
+                <span class="currency">$</span>5.99
+            </div>
+            <div class="price-sub">One-time payment. Lifetime updates included.</div>
+            <button class="cta-btn" onclick="openModal()">Buy Now</button>
+        </section>
+
+        <footer style="text-align: center; padding: 40px 0; color: var(--gray); font-size: 13px;">
+            &copy; 2025 Suger DevTool. All rights reserved.
+        </footer>
+    </div>
+
+    <div class="modal-overlay" id="paymentModal">
+        <div class="modal">
+            <span class="close-btn" onclick="closeModal()">×</span>
+            
+            <div id="formView">
+                <h2>Purchase License</h2>
+                <p>Choose your payment method below.</p>
+                
+                <div id="paypal-button-container"></div>
+
+                <div class="divider">OR Pay via UPI (India)</div>
+                
+                <div class="upi-box">
+                    <div class="upi-title">Scan or Copy UPI ID</div>
+                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=upi://pay?pa=sourav0chand@okaxis&pn=SugerDevTool" alt="UPI QR" class="qr-code">
+                    
+                    <div class="upi-id-container">
+                        <span class="upi-id">sourav0chand@okaxis</span>
+                        <button class="copy-btn" onclick="copyUPI()">COPY</button>
+                    </div>
+<div class="upi-instruction">
+    Amount: <s style="color: #999; margin-right: 5px;">₹550</s> <b>₹450</b><br>
+    After payment, please send the screenshot to <a href="https://t.me/cosmodec" target="_blank" class="telegram-link">Telegram</a> for instant activation.
+</div>
+                </div>
+
+                <div style="text-align: left; margin-top: 20px;">
+                    <div class="input-group">
+                        <label class="step-label">Your Email</label>
+                        <input type="email" id="buyerEmail" class="form-input" placeholder="name@example.com">
+                    </div>
+
+                    <div class="input-group">
+                        <label class="step-label">Transaction ID / Note</label>
+                        <input type="text" id="transId" class="form-input" placeholder="PayPal ID or UPI Ref No.">
+                    </div>
+
+                    <button id="submitBtn" class="confirm-btn">Confirm Purchase</button>
+                </div>
+            </div>
+
+            <div id="successView" class="success-view">
+                <div class="success-icon">✓</div>
+                <h3>Request Received!</h3>
+                <p style="font-size: 15px; color: var(--text); line-height: 1.6;">
+                    We have received your order details.<br>
+                    Your <b>Product Key</b> will be sent to your email or Telegram <br>
+                    <b>within 24 hours</b>.
+                </p>
+                <a href="https://t.me/cosmodec" target="_blank" class="cta-btn" style="margin-top: 15px; font-size: 14px; padding: 12px 30px;">Contact Support</a>
+            </div>
+
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAdXmTRdXK1VahI735Oetso4NXnRzONLlE",
+            authDomain: "sc-devtool.firebaseapp.com",
+            projectId: "sc-devtool",
+            storageBucket: "sc-devtool.firebasestorage.app",
+            messagingSenderId: "88404160104",
+            appId: "1:88404160104:web:9d24f81fbf109def18d5dd"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const submitBtn = document.getElementById('submitBtn');
+        const emailInput = document.getElementById('buyerEmail');
+        const transInput = document.getElementById('transId');
+
+        window.savePurchaseToFirebase = async (details) => {
+            // Auto-fill for PayPal
+            emailInput.value = details.payer.email_address;
+            transInput.value = details.id;
+            submitData('paid');
+        };
+
+        submitBtn.addEventListener('click', () => submitData('pending'));
+
+        async function submitData(status) {
+            const email = emailInput.value.trim();
+            const transId = transInput.value.trim();
+
+            if (!email || !email.includes('@')) { alert("Please enter a valid email."); return; }
+            if (!transId) { alert("Please enter Transaction ID."); return; }
+
+            submitBtn.textContent = "Processing...";
+            submitBtn.disabled = true;
+
+            try {
+                await addDoc(collection(db, "purchases"), {
+                    email: email,
+                    transactionId: transId,
+                    status: status,
+                    timestamp: serverTimestamp(),
+                    userAgent: navigator.userAgent
+                });
+                document.getElementById('formView').style.display = 'none';
+                document.getElementById('successView').style.display = 'flex';
+            } catch (error) {
+                console.error(error);
+                alert("Error saving data. Please contact Telegram support.");
+                submitBtn.disabled = false;
+            }
+        }
+    </script>
+
+    <script src="https://www.paypal.com/sdk/js?client-id=AUzFPo6JoHXG2rdKwSSYFZ64IV-HGlU9dXVKsU1hFTT3UMoFSK4g9AkdR_o05-2xlAFVAaJjEs-q7i9R&currency=USD"></script>
+
+    <script>
+      console.log("Hello");
+        paypal.Buttons({
+            style: { layout: 'vertical', color: 'blue', shape: 'rect', label: 'pay', height: 45 },
+            createOrder: function(data, actions) {
+                return actions.order.create({ purchase_units: [{ description: "Suger DevTool License", amount: { value: '5.99' } }] });
+            },
+            onApprove: function(data, actions) {
+                return actions.order.capture().then(function(details) {
+                    if (window.savePurchaseToFirebase) window.savePurchaseToFirebase(details);
+                });
+            },
+            onError: function (err) { alert("PayPal Payment Failed."); }
+        }).render('#paypal-button-container');
+
+        function openModal() {
+            const modal = document.getElementById('paymentModal');
+            modal.style.display = 'flex';
+            setTimeout(() => { modal.style.opacity = '1'; modal.querySelector('.modal').style.transform = 'scale(1)'; }, 10);
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('paymentModal');
+            modal.style.opacity = '0';
+            modal.querySelector('.modal').style.transform = 'scale(0.9)';
+            setTimeout(() => { modal.style.display = 'none'; }, 300);
+        }
+        
+        function copyUPI() {
+            navigator.clipboard.writeText("sourav0chand@okaxis");
+            const btn = document.querySelector('.copy-btn');
+            btn.textContent = "COPIED";
+            setTimeout(() => btn.textContent = "COPY", 2000);
+        }
+
+        document.getElementById('paymentModal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('paymentModal')) closeModal();
+        });
+    </script>
 </body>
 </html>

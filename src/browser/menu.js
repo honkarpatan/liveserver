@@ -130,6 +130,7 @@ export function openBrowserMenu(api, where) {
     },
     { separator: true },
     zoomRow(api),
+    { label: 'Pinch to zoom', checked: !!api.isPinch?.(), onClick: () => api.togglePinch?.() },
     { label: 'Print…', onClick: () => api.print?.() },
     { label: 'Find…', onClick: () => api.find?.() },
     { label: 'Developer tools', checked: !!api.isDevtools?.(), onClick: () => api.toggleDevtools?.() },

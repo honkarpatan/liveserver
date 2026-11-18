@@ -22,6 +22,8 @@ import {
   initBridge,
   disposeBridge,
   setZoomActive,
+  applyPinchAll,
+  isPinchEnabled,
   addSourceTab,
   renderTabStrip,
   getActiveTab,
@@ -614,6 +616,20 @@ function wireChrome(wrap) {
       findInput.focus();
       findInput.select();
     },
+    isPinch: () => isPinchEnabled(),
+    togglePinch: async () => {
+      const on = !isPinchEnabled();
+      updateSetting('enablePinchToZoom', on);
+      applyPinchAll();
+      toast('Pinch to zoom ' + (on ? 'on' : 'off'), 1400);
+      try {
+        // the Live Server injects the in-page zoom script when /setup says zoom:true
+        const { reapplySetup } = await import('../server/process.js');
+        await reapplySetup();
+      } catch (_) {}
+      const t = getActiveTab();
+      if (t && t.url !== 'about:blank' && isLocalUrl(t.url)) reloadActive();
+    },
     isDevtools: () => !!getActiveTab()?.devtools,
     toggleDevtools: () => {
       const t = getActiveTab();
@@ -706,7 +722,12 @@ function wireChrome(wrap) {
       urlInput.blur();
     }
   });
-  urlInput.addEventListener('focus', () => urlInput.select());
+  const toolbarEl = $('.ls-toolbar');
+  urlInput.addEventListener('focus', () => {
+    urlInput.select();
+    toolbarEl?.classList.add('is-omni');
+  });
+  urlInput.addEventListener('blur', () => toolbarEl?.classList.remove('is-omni'));
 
   find.querySelector('.ls-find-prev').addEventListener('click', () => doFind(true));
   find.querySelector('.ls-find-next').addEventListener('click', () => doFind(false));
@@ -737,10 +758,12 @@ function createChrome() {
         </div>
       </div>
       <div class="ls-toolbar">
-        <button type="button" class="ls-ib ls-back" title="Back" disabled>${icon(I.back, 18)}</button>
-        <button type="button" class="ls-ib ls-fwd" title="Forward" disabled>${icon(I.forward, 18)}</button>
-        <button type="button" class="ls-ib ls-reload" title="Reload">${icon(I.reload, 18)}</button>
-        <button type="button" class="ls-ib ls-home" title="Home">${icon(I.home, 18)}</button>
+        <div class="ls-nav">
+          <button type="button" class="ls-ib ls-back" title="Back" disabled>${icon(I.back, 18)}</button>
+          <button type="button" class="ls-ib ls-fwd" title="Forward" disabled>${icon(I.forward, 18)}</button>
+          <button type="button" class="ls-ib ls-reload" title="Reload">${icon(I.reload, 18)}</button>
+          <button type="button" class="ls-ib ls-home" title="Home">${icon(I.home, 18)}</button>
+        </div>
         <div class="ls-omni">
           <button type="button" class="ls-site" title="Site information">${icon(I.info, 16)}</button>
           <input class="ls-browser-url" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" enterkeyhint="enter" inputmode="text" placeholder="Search or type a URL" />

@@ -239,13 +239,42 @@ function onBridgeMessage(ev) {
   }
 }
 
+/** pinch-to-zoom on/off for one tab (parent side handler) */
+function syncPinch(tab) {
+  if (!tab?.iframe) return;
+  try {
+    const on = getSettings().enablePinchToZoom !== false;
+    if (on && !tab.zoomHandler) tab.zoomHandler = new ZoomHandler(tab.iframe);
+    else if (!on && tab.zoomHandler) {
+      tab.zoomHandler.destroy?.();
+      tab.zoomHandler = null;
+    }
+  } catch (e) {
+    console.warn('[LiveServer] ZoomHandler', e);
+  }
+}
+
+export function applyPinchAll() {
+  tabs.forEach(syncPinch);
+}
+
+export function isPinchEnabled() {
+  return getSettings().enablePinchToZoom !== false;
+}
+
+const onSettingsChanged = (e) => {
+  if (e?.detail?.key === 'enablePinchToZoom') applyPinchAll();
+};
+
 export function initBridge() {
   window.addEventListener('message', onBridgeMessage);
+  window.addEventListener('liveserver-settings', onSettingsChanged);
 }
 
 export function disposeBridge() {
   clearSlowLoadTimer();
   window.removeEventListener('message', onBridgeMessage);
+  window.removeEventListener('liveserver-settings', onSettingsChanged);
 }
 
 function applyFramePolicy(iframe, frameSrc) {
@@ -323,12 +352,7 @@ export function addTab(container, url, title) {
   };
 
   container.appendChild(iframe);
-  try {
-    tab.zoomHandler?.destroy?.();
-    tab.zoomHandler = new ZoomHandler(iframe);
-  } catch (e) {
-    console.warn('[LiveServer] ZoomHandler', e);
-  }
+  syncPinch(tab);
   tabs.push(tab);
   tabs.forEach((t) => {
     if (t.iframe) t.iframe.style.display = t.id === id ? 'block' : 'none';

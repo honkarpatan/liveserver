@@ -36,12 +36,13 @@ export class ZoomHandler {
     updateTouchAction();
     this.element.style.transformOrigin = '0 0';
 
+    this.onEnd = (e) => {
+      this.handleTouchEnd(e);
+      updateTouchAction();
+    };
     this.element.addEventListener('touchstart', this.handleTouchStart);
     this.element.addEventListener('touchmove', this.handleTouchMove);
-    this.element.addEventListener('touchend', (e) => {
-      this.handleTouchEnd(e);
-      updateTouchAction(); 
-    });
+    this.element.addEventListener('touchend', this.onEnd);
     this.element.addEventListener('touchcancel', this.handleTouchEnd);
     this.element.addEventListener('dblclick', this.handleDoubleTap);
   }
@@ -49,9 +50,14 @@ export class ZoomHandler {
   destroy() {
     this.element.removeEventListener('touchstart', this.handleTouchStart);
     this.element.removeEventListener('touchmove', this.handleTouchMove);
-    this.element.removeEventListener('touchend', this.handleTouchEnd);
+    this.element.removeEventListener('touchend', this.onEnd);
     this.element.removeEventListener('touchcancel', this.handleTouchEnd);
     this.element.removeEventListener('dblclick', this.handleDoubleTap);
+    // leave the frame exactly as a normal, un-zoomed one
+    this.finalScale = 1;
+    this.element.style.transform = '';
+    this.element.style.transformOrigin = '';
+    this.element.style.touchAction = '';
   }
   
   getDistance(p1, p2) {

@@ -1,12 +1,12 @@
 /**
- * Full acodels/index.js source + dynamic base64 encoder (marker: ls-proxy-v7).
+ * Full acodels/index.js source + dynamic base64 encoder (marker: ls-proxy-v9).
  * Fixes CSS/HTML regex escaping, Google form.submit() 404s, SPA history.pushState crashes,
  * and dynamic stylesheet/script loading through /__proxy.
  */
 import { toBase64 } from '../utils/alpineExec.js';
 
 export const ACODELS_INDEX_CODE = `/**
- * acodels — Live Server + Local Reverse Proxy Node backend (ls-proxy-v7, ls-bridge-v1)
+ * acodels — Live Server + Local Reverse Proxy Node backend (ls-proxy-v9, ls-bridge-v1)
  */
 const http = require('http');
 const https = require('https');
@@ -142,6 +142,9 @@ const LS_BRIDGE_JS = \`
 \`;
 
 const lsBridgeScript = '<script src="/__ls/bridge.js"></script>';
+/* pinch-zoom engine is embedded: only index.js is written to Alpine, so a separate zoom-handler.js file never existed there */
+const LS_ZOOM_JS = "class ZoomHandler {\\n  constructor(element) {\\n    this.element = element;\\n    if (!this.element) return;\\n    \\n    this.scroller = this.element.parentNode; \\n\\n    this.finalScale = 1;\\n    this.offsetX = 0;\\n    this.offsetY = 0;\\n    \\n    this.tempScale = 1;\\n    this.tempOffsetX = 0;\\n    this.tempOffsetY = 0;\\n\\n    this.panning = false;\\n    this.isPanningContent = false;\\n    \\n    this.initialDistance = 0;\\n    this.panStart = null;\\n    this.pageOrigin = null; \\n\\n    this.handleTouchStart = this.handleTouchStart.bind(this);\\n    this.handleTouchMove = this.handleTouchMove.bind(this);\\n    this.handleTouchEnd = this.handleTouchEnd.bind(this);\\n    this.handleDoubleTap = this.handleDoubleTap.bind(this);\\n\\n    this.setupZoomEvents();\\n  }\\n\\n  setupZoomEvents() {\\n    const updateTouchAction = () => {\\n      this.element.style.touchAction = this.finalScale > 1 ? 'none' : 'auto';\\n    };\\n    updateTouchAction();\\n    this.element.style.transformOrigin = '0 0';\\n\\n    this.element.addEventListener('touchstart', this.handleTouchStart);\\n    this.element.addEventListener('touchmove', this.handleTouchMove);\\n    this.element.addEventListener('touchend', (e) => {\\n      this.handleTouchEnd(e);\\n      updateTouchAction(); \\n    });\\n    this.element.addEventListener('touchcancel', this.handleTouchEnd);\\n    this.element.addEventListener('dblclick', this.handleDoubleTap);\\n  }\\n\\n  destroy() {\\n    this.element.removeEventListener('touchstart', this.handleTouchStart);\\n    this.element.removeEventListener('touchmove', this.handleTouchMove);\\n    this.element.removeEventListener('touchend', this.handleTouchEnd);\\n    this.element.removeEventListener('touchcancel', this.handleTouchEnd);\\n    this.element.removeEventListener('dblclick', this.handleDoubleTap);\\n  }\\n  \\n  getDistance(p1, p2) {\\n    const dx = p1.clientX - p2.clientX;\\n    const dy = p1.clientY - p2.clientY;\\n    return Math.sqrt(dx * dx + dy * dy);\\n  }\\n  \\n  getPageCoordinates(e_touches) {\\n    if (!this.scroller || !this.scroller.getBoundingClientRect) {\\n      this.scroller = this.element.parentNode;\\n      \\n      if (!this.scroller || !this.scroller.getBoundingClientRect) {\\n        console.error(\\"ZoomHandler Error: Cannot find scroller parent element.\\");\\n        return null; \\n      }\\n    }\\n\\n    const scrollerRect = this.scroller.getBoundingClientRect();\\n    const scrollLeft = this.scroller.scrollLeft;\\n    const scrollTop = this.scroller.scrollTop;\\n\\n    const screenX = (e_touches[0].clientX + (e_touches[1]?.clientX || e_touches[0].clientX)) / e_touches.length;\\n    const screenY = (e_touches[0].clientY + (e_touches[1]?.clientY || e_touches[0].clientY)) / e_touches.length;\\n\\n    const x_in_scroller_viewport = screenX - scrollerRect.left;\\n    const y_in_scroller_viewport = screenY - scrollerRect.top;\\n\\n    return {\\n      x: x_in_scroller_viewport + scrollLeft,\\n      y: y_in_scroller_viewport + scrollTop\\n    };\\n  }\\n\\n  handleTouchStart(e) {\\n    if (e.touches.length === 2) {\\n      e.preventDefault();\\n      \\n      this.pageOrigin = this.getPageCoordinates(e.touches);\\n      if (!this.pageOrigin) return; \\n\\n      this.panning = true; \\n      this.initialDistance = this.getDistance(e.touches[0], e.touches[1]);\\n      \\n    } else if (e.touches.length === 1 && this.finalScale > 1) {\\n      const trueHit = this.getPageCoordinates(e.touches);\\n      if (!trueHit) return; \\n\\n      this.isPanningContent = true;\\n      this.panStart = {\\n        x: trueHit.x - this.offsetX,\\n        y: trueHit.y - this.offsetY,\\n      };\\n    }\\n  }\\n\\n  handleTouchMove(e) {\\n    const element = e.currentTarget;\\n\\n    if (this.panning && e.touches.length === 2) {\\n      e.preventDefault();\\n      \\n      const currentDistance = this.getDistance(e.touches[0], e.touches[1]);\\n      const gestureRatio = currentDistance / this.initialDistance;\\n      \\n      this.tempScale = this.finalScale * gestureRatio;\\n      this.tempScale = Math.max(0.5, Math.min(this.tempScale, 5));\\n\\n      const scaleRatio = this.tempScale / this.finalScale;\\n      this.tempOffsetX = this.pageOrigin.x * (1 - scaleRatio) + this.offsetX * scaleRatio;\\n      this.tempOffsetY = this.pageOrigin.y * (1 - scaleRatio) + this.offsetY * scaleRatio;\\n\\n      element.style.transform = \`translate(\${this.tempOffsetX}px, \${this.tempOffsetY}px) scale(\${this.tempScale})\`;\\n    }\\n\\n    else if (this.isPanningContent && e.touches.length === 1 && this.finalScale > 1) {\\n      e.preventDefault();\\n      \\n      const trueHit = this.getPageCoordinates(e.touches);\\n      if (!trueHit) return; \\n      \\n      this.tempOffsetX = trueHit.x - this.panStart.x;\\n      this.tempOffsetY = trueHit.y - this.panStart.y;\\n      \\n      element.style.transform = \`translate(\${this.tempOffsetX}px, \${this.tempOffsetY}px) scale(\${this.finalScale})\`;\\n    }\\n  }\\n  \\n  handleTouchEnd(e) {\\n    if (this.panning) {\\n      this.panning = false;\\n      this.finalScale = this.tempScale;\\n      this.offsetX = this.tempOffsetX;\\n      this.offsetY = this.tempOffsetY;\\n      this.pageOrigin = null; \\n    }\\n    if (this.isPanningContent) {\\n      this.isPanningContent = false;\\n      this.offsetX = this.tempOffsetX;\\n      this.offsetY = this.tempOffsetY;\\n    }\\n  }\\n\\n  handleDoubleTap(e) {\\n    const element = e.currentTarget;\\n    this.finalScale = 1;\\n    this.tempScale = 1;\\n    this.offsetX = 0;\\n    this.offsetY = 0;\\n    this.tempOffsetX = 0;\\n    this.tempOffsetY = 0;\\n    \\n    element.style.transition = 'transform 0.25s ease';\\n    element.style.transformOrigin = '0 0';\\n    element.style.transform = 'translate(0,0) scale(1)';\\n    setTimeout(() => {\\n      element.style.transition = '';\\n    }, 300);\\n  }\\n}\\n";
+
 const zoomScript = \`
 <script src="/zoom-handler.js"></script>
 <script>try { new ZoomHandler(document.body); } catch (e) {}</script>\`;
@@ -216,7 +219,7 @@ app.get('/check', (req, res) => {
     fileName: jsonData.fileName || null,
     liveReload: liveReloadEnabled,
     proxy: true,
-    proxyVersion: 3,
+    proxyVersion: 5,
   });
 });
 
@@ -453,6 +456,7 @@ function buildProxyRuntimeScript(targetUrl) {
       var u = new URL(targetAction);
       var fd = new FormData(form);
       fd.forEach(function(v, k) {
+        if (k === '__ls_u') return;
         if (typeof v === 'string') u.searchParams.append(k, v);
       });
       location.href = proxyBase + encodeURIComponent(u.href);
@@ -578,6 +582,26 @@ function rewriteHtmlForProxy(html, targetUrl) {
       return attr + '=' + quote + rewrittenList + quote;
     }
   );
+
+  // GET forms (Google search...): a native submit drops the ?url= of the action and the Referer
+  // is often origin-only, so carry the real target inside the form as a hidden field.
+  out = out.replace(/<form\\b[^>]*>/gi, (tag) => {
+    if (/\\bmethod\\s*=\\s*["']?\\s*post/i.test(tag)) return tag;
+    let target = targetUrl;
+    const m = tag.match(/\\baction\\s*=\\s*(["'])([^"']*)\\1/i);
+    if (m) {
+      let a = m[2].replace(/&amp;/g, '&');
+      const k = a.indexOf('/__proxy?url=');
+      try {
+        if (k !== -1) a = decodeURIComponent(a.slice(k + '/__proxy?url='.length).split('&')[0]);
+        target = new URL(a || targetUrl, targetUrl).href;
+      } catch (_) {}
+    }
+    let fixed = tag;
+    if (!m) fixed = tag.replace(/^<form/i, '<form action="/__proxy?url=' + encodeURIComponent(target) + '"');
+    const safe = String(target).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    return fixed + '<input type="hidden" name="__ls_u" value="' + safe + '">';
+  });
 
   // Rewrite inline <style> blocks
   out = out.replace(
@@ -792,6 +816,21 @@ app.all(['/__proxy', '/_proxy'], (req, res) => {
     const target = String(req.query.url);
         return handleProxyRequest(req, res, target);
   }
+  // GET form submitted natively: real target travels in the hidden __ls_u field
+  if (req.query.__ls_u) {
+    try {
+      const u = new URL(String(req.query.__ls_u));
+      Object.keys(req.query || {}).forEach((k) => {
+        if (k === '__ls_u') return;
+        const v = req.query[k];
+        u.searchParams.delete(k);
+        (Array.isArray(v) ? v : [v]).forEach((x) => {
+          if (typeof x === 'string') u.searchParams.append(k, x);
+        });
+      });
+      return handleProxyRequest(req, res, u.href);
+    } catch (_) {}
+  }
   // Fallback when a GET form (like Google Search) strips ?url= and submits ?q=... directly to /__proxy
   const ref = req.headers.referer || '';
   const idx = ref.indexOf('/__proxy?url=');
@@ -840,9 +879,7 @@ app.get('/dt/suger-dev.js', (req, res) => {
   else res.status(404).end();
 });
 app.get('/zoom-handler.js', (req, res) => {
-  const p = path.join(__dirname, 'zoom-handler.js');
-  if (fs.existsSync(p)) res.sendFile(p);
-  else res.status(404).end();
+  res.type('application/javascript').set('Cache-Control', 'no-store').send(LS_ZOOM_JS);
 });
 app.get('/inspector.js', (req, res) => {
   const p = path.join(__dirname, 'inspector.js');
