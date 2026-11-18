@@ -713,7 +713,7 @@ async function ingest(startRels, opts = {}) {
 
   if (skipped.length) {
     console.warn('[LiveServer:mirror] skipped', skipped.slice(0, 6).join(', '));
-    toast('Mirror skipped large file: ' + skipped[0], 3500);
+    toast('Mirror skipped large file , Try from Acode Terminal Storage: ' + skipped[0], 3500);
   }
   return written;
 }
@@ -874,7 +874,6 @@ export function ensureProjectMirror(opts = {}) {
     // fresh cache dir for this project
     await shellOut('rm -rf ' + q(aroot) + ' && mkdir -p ' + q(aroot), 20000);
 
-    toast('Copying project files from storage…', 1800);
     const n = await ingest([entryRel]);
     if (!state.files.has(entryRel) || n === 0) {
       const why = 'Could not copy ' + entryRel + ' (' + (tp.mode || '') + ')';
@@ -888,7 +887,7 @@ export function ensureProjectMirror(opts = {}) {
 
     startPolling();
     console.log('[LiveServer:mirror] ready', aroot, 'files=', state.files.size, 'mode=', transport.mode);
-    toast('Mirrored ' + state.files.size + ' file(s) · auto-sync on', 2200);
+    // toast('Mirrored ' + state.files.size + ' file(s) · auto-sync on', 2200);
     return aroot;
   });
 }
