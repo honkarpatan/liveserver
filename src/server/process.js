@@ -86,9 +86,15 @@ async function killNodeOnPort(port) {
 
 function mapRootFast(root) {
   const r = String(root || '').replace(/\/+$/, '') || '/';
-  const m = r.match(/^\/storage\/emulated\/0(\/.*)?$/);
+  let m = r.match(/^\/storage\/emulated\/0(\/.*)?$/);
+  if (m) return '/sdcard' + (m[1] || '');
+  m = r.match(/^\/storage\/self\/primary(\/.*)?$/);
   if (m) return '/sdcard' + (m[1] || '');
   return r;
+}
+
+function normalizeFsPath(p) {
+  return mapRootFast(String(p || '').replace(/\/+$/, ''));
 }
 
 
@@ -116,13 +122,25 @@ async function resolveServeRoot(root, fileName) {
 
 async function resolveAlpineRoot(root) {
   const r = String(root || '').replace(/\/+$/, '') || '/';
+  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+
+  // 1) Direct exists — Alpine/Termux paths must work without remapping to /sdcard
+  try {
+    const out = await silentExec('[ -d ' + q(r) + ' ] && echo OK || echo NO', { timeoutMs: 8000 });
+    if (String(out || '').includes('OK')) {
+      console.log('[LiveServer] alpine root (direct)', r);
+      return r;
+    }
+  } catch (e) {
+    console.warn('[LiveServer] root direct check', e);
+  }
+
+  // 2) Only for Android shared storage: try aliases
   const cands = [];
   const push = (x) => {
     if (x && !cands.includes(x)) cands.push(x);
   };
   push(r);
-
-  // Internal shared storage aliases
   let m = r.match(/^\/storage\/emulated\/0(\/.*)?$/);
   if (m) push('/sdcard' + (m[1] || ''));
   m = r.match(/^\/sdcard(\/.*)?$/);
@@ -135,62 +153,66 @@ async function resolveAlpineRoot(root) {
     push('/sdcard' + (m[1] || ''));
     push('/storage/emulated/0' + (m[1] || ''));
   }
-
-  // External SD (UUID volume) — try common Alpine/Android mounts
   const uuidM = r.match(/^\/storage\/([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})(\/.*)?$/);
   if (uuidM) {
     const id = uuidM[1];
     const tail = uuidM[2] || '';
     push('/storage/' + id + tail);
     push('/mnt/media_rw/' + id + tail);
-    push('/mnt/runtime/default/' + id + tail);
-    push('/storage/' + id.toUpperCase() + tail);
-    push('/storage/' + id.toLowerCase() + tail);
   }
 
-  // Relative tail under any mounted volume (last-resort scan)
-  const tailOnly = (() => {
-    const mm = r.match(/\/(?:storage|sdcard|emulated|media_rw)\/[^/]+(\/.+)$/i);
-    return mm ? mm[1] : '';
-  })();
-
-  if (!/^\/(sdcard|storage|mnt)(\/|$)/.test(r) && !r.startsWith('/data/')) {
-    // non-storage path (e.g. termux home) — return as-is after quick exists probe below
-  }
-
-  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
-  const script =
-    'for d in ' +
-    cands.map(q).join(' ') +
-    '; do [ -d "$d" ] && { echo "OK:$d"; exit 0; }; done; ' +
-    (tailOnly
-      ? 'for base in /storage/* /mnt/media_rw/* /sdcard; do ' +
-        '[ -d "$base' +
-        tailOnly.replace(/'/g, "'\\''") +
-        '" ] && { echo "OK:$base' +
-        tailOnly.replace(/'/g, "'\\''") +
-        '"; exit 0; }; done; '
-      : '') +
-    'echo NONE';
-
-  let out = '';
-  try {
-    out = await silentExec(script, { timeoutMs: 12000 });
-  } catch (e) {
-    console.warn('[LiveServer] root probe failed, using path as is', e);
-    return mapRootFast(r);
-  }
-  const hit = String(out || '').match(/OK:(.+)/);
-  if (hit) {
-    console.log('[LiveServer] alpine root', hit[1].trim());
-    return hit[1].trim();
-  }
-  if (/NONE/.test(String(out || ''))) {
-    console.warn('[LiveServer] alpine root not found for', r, 'cands=', cands);
+  // Non-storage paths ( /root, /home, /data/... ) — already failed direct check
+  if (!/^\/(sdcard|storage|mnt)(\/|$)/.test(r)) {
+    console.warn('[LiveServer] alpine root not found (non-storage)', r);
     return null;
   }
-  return mapRootFast(r);
+
+  try {
+    const out = await silentExec(
+      'for d in ' +
+        cands.map(q).join(' ') +
+        '; do [ -d "$d" ] && { echo "OK:$d"; exit 0; }; done; echo NONE',
+      { timeoutMs: 10000 }
+    );
+    const hit = String(out || '').match(/OK:(.+)/);
+    if (hit) {
+      console.log('[LiveServer] alpine root', hit[1].trim());
+      return hit[1].trim();
+    }
+  } catch (e) {
+    console.warn('[LiveServer] root probe failed', e);
+  }
+  return null;
 }
+
+/** If fileName missing under root, find it (maxdepth 4) and return { root, fileName } */
+async function locateEntryUnderRoot(root, fileName) {
+  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+  const baseName = String(fileName || 'index.html').replace(/^.*\//, '') || 'index.html';
+  const script =
+    'R=' +
+    q(root) +
+    '; F=' +
+    q(String(fileName || '').replace(/^\/+/, '')) +
+    '; B=' +
+    q(baseName) +
+    '; ' +
+    'if [ -f "$R/$F" ]; then echo "HIT:$R|$F"; exit 0; fi; ' +
+    'if [ -f "$R/$B" ]; then echo "HIT:$R|$B"; exit 0; fi; ' +
+    'found=$(find "$R" -maxdepth 4 -type f -name "$B" 2>/dev/null | head -1); ' +
+    'if [ -n "$found" ]; then dir=$(dirname "$found"); echo "HIT:$dir|$B"; exit 0; fi; ' +
+    'echo MISS; ls -la "$R" 2>&1 | head -15';
+  try {
+    const out = await silentExec(script, { timeoutMs: 12000 });
+    console.log('[LiveServer] entry locate', String(out || '').slice(0, 240));
+    const m = String(out || '').match(/HIT:([^|]+)\|([^\n]+)/);
+    if (m) return { root: m[1].trim(), fileName: m[2].trim() };
+  } catch (e) {
+    console.warn('[LiveServer] locateEntry', e);
+  }
+  return null;
+}
+
 
 function parseCustomHeaders(text) {
   const out = {};
@@ -219,10 +241,15 @@ function relativeFileUnderRoot(root) {
     const f = getActiveFile();
     const fsPath = uriToFsPath(f?.uri || f?.url || '');
     if (!fsPath || !root) return activeHtmlName();
-    const normRoot = root.replace(/\/+$/, '');
-    if (fsPath.startsWith(normRoot + '/') || fsPath.startsWith(normRoot + '\\')) {
-      return fsPath.slice(normRoot.length).replace(/^[/\\]+/, '').replace(/\\/g, '/');
+    const normRoot = normalizeFsPath(root);
+    const normFile = normalizeFsPath(fsPath);
+    if (normFile === normRoot) return activeHtmlName();
+    if (normFile.startsWith(normRoot + '/')) {
+      return normFile.slice(normRoot.length).replace(/^\/+/, '');
     }
+    // basename fallback when roots differ only by mount alias
+    const base = normFile.split('/').pop();
+    if (base && /\.html?$/i.test(base)) return base;
   } catch (_) {}
   return activeHtmlName();
 }
@@ -248,6 +275,7 @@ async function patchSetup(port, root, fileName) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    console.log('[LiveServer] setup', root, fileName, res && res.status);
     return !!(res && (res.ok || res.status === 201));
   } catch (e) {
     console.warn('[LiveServer] setup', e);
@@ -470,6 +498,7 @@ export async function startServer(opts = {}) {
       return false;
     }
 
+    const fileName = opts.fileName || relativeFileUnderRoot(effectiveRoot);
     let aroot;
     let mirrored = false;
     try {
@@ -478,9 +507,8 @@ export async function startServer(opts = {}) {
       mirrored = resolved.mirrored;
     } catch (e) {
       toast('Cannot serve folder: ' + (e?.message || e), 4000);
-      return null;
+      return false;
     }
-    const fileName = opts.fileName || relativeFileUnderRoot(effectiveRoot);
     const needsSetup = !st.running || st.port !== port || st.root !== aroot || st.fileName !== fileName;
 
     if (needsSetup) {
@@ -551,6 +579,23 @@ export async function startServer(opts = {}) {
     setServerStatus({ running: false, lastError: 'root not reachable' });
     toast('Folder not reachable — mirror also failed. Use internal /sdcard or grant storage access.', 4500);
     return false;
+  }
+
+
+  // Locate entry file (fixes wrong parent root / nested T.html)
+  try {
+    const located = await locateEntryUnderRoot(aroot, fileName);
+    if (located) {
+      if (located.root !== aroot || located.fileName !== fileName) {
+        console.log('[LiveServer] adjusted root/file', aroot, fileName, '->', located.root, located.fileName);
+        aroot = located.root;
+        fileName = located.fileName;
+      }
+    } else if (!mirrored) {
+      console.warn('[LiveServer] entry missing under', aroot, fileName);
+    }
+  } catch (e) {
+    console.warn('[LiveServer] locate failed', e);
   }
 
   const nodeBind = '0.0.0.0';

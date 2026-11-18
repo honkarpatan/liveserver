@@ -1,3 +1,4 @@
+
 import { getSettings, updateSetting } from '../core/settings.js';
 import { getActiveFile, uriToFsPath, dirnamePath } from '../utils/paths.js';
 
@@ -5,34 +6,58 @@ const toast = acode.require('toast');
 const select = acode.require('select');
 const prompt = acode.require('prompt');
 
-export function getEffectiveRoot() {
-  const s = getSettings();
-  if (s.rootFolder && String(s.rootFolder).trim()) return String(s.rootFolder).trim();
-  const f = getActiveFile();
-  const fs = uriToFsPath(f?.uri || f?.url || '');
-  if (fs) return dirnamePath(fs);
-  return null;
+function mapRootFast(root) {
+  const r = String(root || '').replace(/\/+$/, '') || '';
+  let m = r.match(/^\/storage\/emulated\/0(\/.*)?$/);
+  if (m) return '/sdcard' + (m[1] || '');
+  m = r.match(/^\/storage\/self\/primary(\/.*)?$/);
+  if (m) return '/sdcard' + (m[1] || '');
+  return r;
 }
 
-/** Acode URI for active file folder when path is content:// based */
-export function getEffectiveRootUri() {
-  const s = getSettings();
-  if (s.rootFolderUri && String(s.rootFolderUri).trim()) return String(s.rootFolderUri).trim();
-  const f = getActiveFile();
-  const uri = f?.uri || f?.url || '';
-  if (!uri) return null;
-  if (uri.includes('::')) {
-    // tree::doc → keep tree part as folder context
-    const base = uri.split('::')[0];
-    return base;
-  }
-  const fs = uriToFsPath(uri);
-  return fs ? dirnamePath(fs) : null;
+function norm(p) {
+  return mapRootFast(String(p || '').replace(/\/+$/, ''));
 }
 
 /**
- * Open Acode file browser to pick a folder (same UX as other plugins).
+ * Prefer the folder of the active HTML file when it is outside the saved root.
+ * Stale settings.rootFolder was forcing /sdcard/... and breaking Alpine projects.
  */
+export function getEffectiveRoot() {
+  const s = getSettings();
+  const f = getActiveFile();
+  const fs = uriToFsPath(f?.uri || f?.url || '');
+  const activeDir = fs ? dirnamePath(fs) : null;
+  const saved = (s.rootFolder && String(s.rootFolder).trim()) || '';
+
+  if (saved && activeDir) {
+    const nSaved = norm(saved);
+    const nActive = norm(activeDir);
+    if (nActive === nSaved || nActive.startsWith(nSaved + '/')) return saved;
+    // Active HTML is not under saved root → serve from active file folder
+    console.log('[LiveServer] root: active file outside saved root, using', activeDir, '(saved was', saved, ')');
+    return activeDir;
+  }
+  if (saved) return saved;
+  return activeDir;
+}
+
+export function getEffectiveRootUri() {
+  const s = getSettings();
+  const f = getActiveFile();
+  const uri = f?.uri || f?.url || '';
+  const activeDir = (() => {
+    const fs = uriToFsPath(uri);
+    return fs ? dirnamePath(fs) : null;
+  })();
+  if (s.rootFolderUri && String(s.rootFolderUri).trim()) {
+    // only keep if still matches active area
+    if (!activeDir) return String(s.rootFolderUri).trim();
+  }
+  if (uri.includes('::')) return uri.split('::')[0];
+  return activeDir;
+}
+
 export async function browseRootFolder() {
   try {
     const FileBrowser = acode.require('fileBrowser');
@@ -56,9 +81,6 @@ export async function browseRootFolder() {
   }
 }
 
-/**
- * Pick root: use active file folder, type path, browse, or clear to auto
- */
 export async function pickRootFolder() {
   try {
     const cur = getSettings().rootFolder || '';
@@ -115,7 +137,6 @@ export async function pickRootFolder() {
   }
 }
 
-/** Selected / opened folder from Acode if available */
 export function rootFromSelectedFolder() {
   try {
     const sel =

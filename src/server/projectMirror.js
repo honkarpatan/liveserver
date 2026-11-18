@@ -9,7 +9,7 @@ import { silentExec } from '../utils/alpineExec.js';
 
 const toast = acode.require('toast');
 
-const MIRROR_HOST = '/sdcard/Acode/liveserver_cache';
+const MIRROR_HOST = '/root/.acode_liveserver/cache';
 const MAX_FILES = 250;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 40 * 1024 * 1024;
@@ -83,19 +83,16 @@ function resolveRel(fromDir, ref) {
 
 async function readText(uriOrPath) {
   const fs = fsOp();
-  if (!fs) throw new Error('fsOperation missing');
-  try {
-    const data = await fs(uriOrPath).readFile('utf-8');
-    if (typeof data === 'string') return data;
-    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
-    return String(data || '');
-  } catch (e) {
-    // try plain path
-    const data = await fs(uriOrPath).readFile();
-    if (typeof data === 'string') return data;
-    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
-    return String(data || '');
+  if (typeof fs !== 'function') throw new Error('fsOperation missing');
+  const handle = fs(uriOrPath);
+  if (!handle || typeof handle.readFile !== 'function') {
+    throw new Error('readFile unavailable for ' + uriOrPath);
   }
+  const data = await handle.readFile('utf-8');
+  if (typeof data === 'string') return data;
+  if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+  if (data && data.data) return new TextDecoder().decode(data.data);
+  return String(data ?? '');
 }
 
 async function writeText(path, text) {

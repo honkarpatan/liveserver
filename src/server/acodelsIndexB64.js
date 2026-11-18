@@ -1,12 +1,12 @@
 /**
- * Full acodels/index.js source + dynamic base64 encoder (marker: ls-proxy-v6).
+ * Full acodels/index.js source + dynamic base64 encoder (marker: ls-proxy-v7).
  * Fixes CSS/HTML regex escaping, Google form.submit() 404s, SPA history.pushState crashes,
  * and dynamic stylesheet/script loading through /__proxy.
  */
 import { toBase64 } from '../utils/alpineExec.js';
 
 export const ACODELS_INDEX_CODE = `/**
- * acodels — Live Server + Local Reverse Proxy Node backend (ls-proxy-v6, ls-bridge-v1)
+ * acodels — Live Server + Local Reverse Proxy Node backend (ls-proxy-v7, ls-bridge-v1)
  */
 const http = require('http');
 const https = require('https');
@@ -882,17 +882,31 @@ function sendHtmlFile(res, fullPath) {
   });
 }
 
+
+function safeJoinRoot(root, reqPath) {
+  const base = path.resolve(String(root || '/'));
+  let rel = decodeURIComponent(String(reqPath || ''));
+  rel = rel.split('?')[0].split('#')[0];
+  // CRITICAL: path.join(root, '/T.html') => '/T.html' on Node — strip leading slashes
+  while (rel.charAt(0) === '/') rel = rel.slice(1);
+  if (!rel || rel === '.') return base;
+  const full = path.resolve(base, rel);
+  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
+  if (full !== base && !full.startsWith(prefix)) return null;
+  return full;
+}
+
 app.get('/', (req, res) => {
   if (!BASE_DIR) return res.status(400).send('Not configured. PATCH /setup first.');
-  const fileName = jsonData.fileName || 'index.html';
-  const fullPath = path.join(BASE_DIR, fileName);
-  if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+  const fileName = String(jsonData.fileName || 'index.html').split('/').filter(Boolean).join('/');
+  const fullPath = safeJoinRoot(BASE_DIR, fileName);
+  if (fullPath && fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
     return sendHtmlFile(res, fullPath);
   }
-  const indexPath = path.join(BASE_DIR, 'index.html');
-  if (fs.existsSync(indexPath)) return sendHtmlFile(res, indexPath);
+  const indexPath = safeJoinRoot(BASE_DIR, 'index.html');
+  if (indexPath && fs.existsSync(indexPath)) return sendHtmlFile(res, indexPath);
   if (directoryListing) return listDir(res, BASE_DIR, '/');
-  return res.status(404).send('No index.html');
+  return res.status(404).send('No index.html in ' + BASE_DIR + ' (wanted ' + fileName + ')');
 });
 
 function listDir(res, dirPath, urlPath) {
@@ -915,19 +929,22 @@ function listDir(res, dirPath, urlPath) {
 app.use((req, res, next) => {
   if (!BASE_DIR) return next();
   const rel = decodeURIComponent(req.path || '/');
-  const full = path.join(BASE_DIR, rel);
-  if (!full.startsWith(path.resolve(BASE_DIR))) return res.status(403).end();
+  if (rel === '/' || rel === '') return next();
+  const full = safeJoinRoot(BASE_DIR, rel);
+  if (!full) return res.status(403).send('Forbidden path');
   fs.stat(full, (err, st) => {
-    if (err) return next();
+    if (err) {
+      return res.status(404).send('Cannot get ' + rel.replace(/^[/]+/, '') + ' (root ' + BASE_DIR + ')');
+    }
     if (st.isDirectory()) {
       if (directoryListing) return listDir(res, full, rel.endsWith('/') ? rel : rel + '/');
-      const idx = path.join(full, 'index.html');
-      if (fs.existsSync(idx)) return sendHtmlFile(res, idx);
+      const idx = safeJoinRoot(full, 'index.html');
+      if (idx && fs.existsSync(idx)) return sendHtmlFile(res, idx);
       return res.status(404).end();
     }
-    if (/\\.html?$/i.test(full)) return sendHtmlFile(res, full);
+    if (/\.html?$/i.test(full)) return sendHtmlFile(res, full);
     res.sendFile(full, (e) => {
-      if (e) next();
+      if (e) res.status(404).send('Cannot get ' + rel.replace(/^[/]+/, ''));
     });
   });
 });
