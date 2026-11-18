@@ -7,6 +7,7 @@ export const defaultSettings = {
   rootFolder: '',
   rootFolderUri: '',
   lastMirrorRoot: '',
+  mirrorSharedStorage: true, // sdcard / SD card: copy through Acode fs and serve from Alpine cache
   liveReload: true,
   openBrowserOnStart: true,
   directoryListing: true,
@@ -14,7 +15,7 @@ export const defaultSettings = {
 
   // Browser
   browserDisplayMode: 'inPage', // inPage | editorTab
-  browserSearchEngine: 'google', // google | duckduckgo | bing | brave
+  browserSearchEngine: 'brave', // google | duckduckgo | bing | brave
   externalSiteMode: 'proxy', // proxy | acodeWebview | inApp | systemBrowser
   browserHomeUrl: '', // empty = Green Fox Homepage
   showSideButton: true,

@@ -71,6 +71,13 @@ export const SCHEMA = [
     checkbox: true,
   },
   {
+    key: 'mirrorSharedStorage',
+    category: 'General',
+    text: 'Serve sdcard via safe copy',
+    info: 'Copy the HTML + its dependencies from sdcard / SD card into Alpine cache and keep them synced',
+    checkbox: true,
+  },
+  {
     key: 'autoShutdownMinutes',
     category: 'General',
     text: 'Auto shutdown (minutes)',

@@ -98,26 +98,75 @@ function normalizeFsPath(p) {
 }
 
 
-async function resolveServeRoot(root, fileName) {
-  let aroot = await resolveAlpineRoot(root);
-  if (aroot) return { aroot, mirrored: false };
+/** true when Alpine can really read the entry file (a visible dir is not enough: /sdcard may be empty or blocked) */
+async function alpineCanReadEntry(aroot, fileName) {
+  const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+  const rel = String(fileName || 'index.html').replace(/^\/+/, '');
+  const f = aroot.replace(/\/+$/, '') + '/' + rel;
+  try {
+    const out = await silentExec(
+      '[ -f ' + q(f) + ' ] && [ -r ' + q(f) + ' ] && head -c 1 ' + q(f) + ' >/dev/null 2>&1 && echo ENTRY_OK || echo ENTRY_NO',
+      { timeoutMs: 8000 }
+    );
+    return String(out || '').includes('ENTRY_OK');
+  } catch (_) {
+    return false;
+  }
+}
 
-  // Alpine cannot see this path (common on external SD / SAF) → mirror to internal
-  console.warn('[LiveServer] alpine root missing, trying project mirror for', root);
+const SHARED_STORAGE_RE = /^\/(sdcard|storage|mnt)(\/|$)/;
+
+async function resolveServeRoot(root, fileName, opts = {}) {
+  const entry = fileName || 'index.html';
+  const aroot = await resolveAlpineRoot(root);
+
+  // Shared storage (sdcard / SD card): never trust Alpine's view of it. Acode fs reads it,
+  // copies the HTML + exact dependencies into Alpine's own storage and keeps them in sync.
+  const sharedRoot = SHARED_STORAGE_RE.test(String(root || '')) || SHARED_STORAGE_RE.test(String(aroot || ''));
+  let preferMirror = !!opts.forceMirror;
   try {
     const { getSettings } = await import('../core/settings.js');
-    const entry = fileName || 'index.html';
-    const mirrored = await mirrorIfNeeded(
-      root,
-      entry,
-      getSettings().rootFolderUri || ''
-    );
+    if (sharedRoot && getSettings().mirrorSharedStorage !== false) preferMirror = true;
+  } catch (_) {}
+  if (preferMirror) {
+    try {
+      const { getSettings } = await import('../core/settings.js');
+      const mirrored = await mirrorIfNeeded(root, entry, getSettings().rootFolderUri || '');
+      if (mirrored) return { aroot: mirrored, mirrored: true };
+    } catch (e) {
+      console.warn('[LiveServer] mirror failed, falling back to direct Alpine path:', e?.message || e);
+      if (!aroot) throw e;
+    }
+  }
+
+  // Alpine sees the folder AND can read the entry file -> serve it directly
+  if (aroot) {
+    if (await alpineCanReadEntry(aroot, entry)) {
+      try { stopMirrorWatch(); } catch (_) {}
+      return { aroot, mirrored: false };
+    }
+    // entry may sit deeper (wrong parent root); let locateEntryUnderRoot decide before mirroring
+    try {
+      if (await locateEntryUnderRoot(aroot, entry)) {
+        try { stopMirrorWatch(); } catch (_) {}
+        return { aroot, mirrored: false };
+      }
+    } catch (_) {}
+    console.warn('[LiveServer] alpine sees', aroot, 'but not', entry, '-> mirroring through Acode fs');
+  } else {
+    console.warn('[LiveServer] alpine cannot see', root, '-> mirroring through Acode fs');
+  }
+
+  try {
+    const { getSettings } = await import('../core/settings.js');
+    const mirrored = await mirrorIfNeeded(root, entry, getSettings().rootFolderUri || '');
     if (mirrored) return { aroot: mirrored, mirrored: true };
   } catch (e) {
     console.warn('[LiveServer] mirror failed', e);
+    if (aroot) return { aroot, mirrored: false }; // best effort: old behaviour
     throw e;
   }
-  return { aroot: null, mirrored: false };
+  return { aroot: aroot || null, mirrored: false };
 }
 
 async function resolveAlpineRoot(root) {
@@ -281,6 +330,41 @@ async function patchSetup(port, root, fileName) {
     console.warn('[LiveServer] setup', e);
     return false;
   }
+}
+
+/** HTTP status of the page as the server really answers it (0 = no answer) */
+async function probePage(port, fileName) {
+  const rel = fileName && fileName !== 'index.html' ? encodeURI(fileName) : '';
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch('http://127.0.0.1:' + port + '/' + rel, { cache: 'no-store', signal: ctrl.signal });
+    clearTimeout(to);
+    return res.status;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/**
+ * Self-heal: if the server answers 404 for the entry page although it was served directly,
+ * Alpine cannot really read that folder -> copy through Acode fs and serve the copy.
+ */
+async function healIfNotServed(port, root, aroot, fileName) {
+  const status = await probePage(port, fileName);
+  if (status !== 404) return { aroot, mirrored: false, healed: false };
+  console.warn('[LiveServer] server answered 404 for', fileName, 'from', aroot, '-> trying storage mirror');
+  try {
+    const { getSettings } = await import('../core/settings.js');
+    const m = await mirrorIfNeeded(root, fileName || 'index.html', getSettings().rootFolderUri || '');
+    if (m) {
+      await patchSetup(port, m, fileName);
+      return { aroot: m, mirrored: true, healed: true };
+    }
+  } catch (e) {
+    console.warn('[LiveServer] heal mirror failed', e?.message || e);
+  }
+  return { aroot, mirrored: false, healed: false };
 }
 
 function clearInactivityTimer() {
@@ -514,6 +598,10 @@ export async function startServer(opts = {}) {
     if (needsSetup) {
       await patchSetup(port, aroot, fileName);
     }
+    if (needsSetup && !mirrored) {
+      const h = await healIfNotServed(port, effectiveRoot, aroot, fileName);
+      if (h.healed) { aroot = h.aroot; mirrored = true; }
+    }
 
     const urlBase = buildServerUrl(port, '127.0.0.1');
     const pageUrl =
@@ -563,7 +651,7 @@ export async function startServer(opts = {}) {
     return false;
   }
 
-  const fileName = opts.fileName || relativeFileUnderRoot(root);
+  let fileName = opts.fileName || relativeFileUnderRoot(root);
   let aroot;
   let mirrored = false;
   try {
@@ -651,6 +739,10 @@ export async function startServer(opts = {}) {
   const configured = await patchSetup(port, aroot, fileName);
   if (!configured) {
     console.warn('[LiveServer] /setup patch failed');
+  }
+  if (configured && !mirrored) {
+    const h = await healIfNotServed(port, root, aroot, fileName);
+    if (h.healed) { aroot = h.aroot; mirrored = true; }
   }
 
   const urlBase = buildServerUrl(port, '127.0.0.1');

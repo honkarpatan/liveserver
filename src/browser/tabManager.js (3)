@@ -1,0 +1,664 @@
+/**
+ * Multi-tab state for the in-app browser with per-tab Back/Forward history stack,
+ * Tri-Browser Turbo Engine (Google ?igu=1, Universal Video/Social Embeds,
+ * Cordova Native HTTP Scraper, and Node Streaming Proxy fallback).
+ */
+import { icon, I } from './icons.js';
+import { loadDevtoolCode } from './devtool.js';
+import { getSettings } from '../core/settings.js';
+import { ensureProxyServer } from '../server/process.js';
+import { getServerStatus } from '../server/status.js';
+import { ZoomHandler } from './zoomHandler.js';
+import {
+  TURBO_IFRAME_ALLOW,
+  optimizeGoogleUrl,
+  generateEmbedUrl,
+  hasCordovaHttp,
+  fetchViaCordovaTurbo,
+} from './turboProxy.js';
+
+const toast = acode.require('toast');
+
+let tabs = [];
+let activeTabId = null;
+let nextId = 1;
+let listeners = [];
+let visited = [];
+let loadGuardTimer = null;
+
+export function getTabs() {
+  return tabs.slice();
+}
+
+export function getActiveTab() {
+  return tabs.find((t) => t.id === activeTabId) || null;
+}
+
+export function getVisited() {
+  return visited.slice();
+}
+
+export function clearVisited() {
+  visited = [];
+  emit();
+}
+
+export function canGoBack() {
+  const t = getActiveTab();
+  return !!(t && t.historyIndex > 0);
+}
+
+export function canGoForward() {
+  const t = getActiveTab();
+  return !!(t && t.historyIndex < t.history.length - 1);
+}
+
+export function onTabsChange(fn) {
+  listeners.push(fn);
+  return () => {
+    listeners = listeners.filter((f) => f !== fn);
+  };
+}
+
+function emit() {
+  listeners.forEach((fn) => {
+    try {
+      fn(getTabs(), getActiveTab());
+    } catch (_) {}
+  });
+}
+
+function remember(url, title) {
+  const clean = toDisplayUrl(url);
+  if (!clean || clean === 'about:blank' || clean.startsWith('blob:') || clean.startsWith('view-source:')) return;
+  visited = visited.filter((v) => v.url !== clean);
+  visited.unshift({ url: clean, title: title || clean.replace(/^https?:\/\//i, ''), ts: Date.now() });
+  if (visited.length > 50) visited.length = 50;
+}
+
+export function isLocalUrl(url) {
+  const clean = toDisplayUrl(url);
+  return /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|192\.168\.|10\.)/i.test(String(clean || ''));
+}
+
+export function toDisplayUrl(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s || s === 'about:srcdoc') return 'about:blank';
+  const marker = '/__proxy?url=';
+  const idx = s.indexOf(marker);
+  if (idx !== -1) {
+    try {
+      const encoded = s.slice(idx + marker.length).split('&')[0];
+      return decodeURIComponent(encoded);
+    } catch (_) {}
+  }
+  return s;
+}
+
+export function normalizeUrl(raw) {
+  let u = toDisplayUrl(raw);
+  if (!u || u === 'about:blank') return 'about:blank';
+  if (/^(about:|blob:|data:|view-source:|https?:\/\/)/i.test(u)) return u;
+
+  if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/.*)?$/i.test(u)) {
+    return 'http://' + u;
+  }
+
+  if (!/\s/.test(u) && /^[a-z0-9-]+(\.[a-z0-9-]+)+([/?#].*)?$/i.test(u)) {
+    return 'https://' + u;
+  }
+
+  const engine = getSettings().browserSearchEngine || 'google';
+  const q = encodeURIComponent(u);
+  if (engine === 'duckduckgo') return `https://duckduckgo.com/?q=${q}`;
+  if (engine === 'bing') return `https://www.bing.com/search?q=${q}`;
+  if (engine === 'brave') return `https://search.brave.com/search?q=${q}`;
+  // Google Search with ?igu=1 (Tri-Browser secret: Google natively allows iframe embedding!)
+  return `https://www.google.com/search?igu=1&q=${q}`;
+}
+
+export function sendToTab(tab, cmd, extra) {
+  try {
+    tab.iframe.contentWindow.postMessage({ ls: 1, cmd, ...(extra || {}) }, '*');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function directWin(tab) {
+  try {
+    const w = tab.iframe?.contentWindow;
+    void w.document;
+    return w;
+  } catch (_) {
+    return null;
+  }
+}
+
+export function applyZoom(tab) {
+  if (!tab) return;
+  const pct = tab.zoom || 100;
+  const factor = pct / 100;
+  try {
+    if (tab.iframe) {
+      tab.iframe.style.zoom = String(factor);
+      tab.iframe.style.transformOrigin = '0 0';
+    }
+  } catch (_) {}
+  const w = directWin(tab);
+  if (w) {
+    try {
+      w.document.documentElement.style.zoom = String(factor);
+    } catch (_) {}
+  }
+  sendToTab(tab, 'zoom', { pct });
+}
+
+function findTab(source) {
+  return tabs.find((t) => {
+    try {
+      return t.iframe.contentWindow === source;
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+function pushTabHistory(tab, displayUrl) {
+  if (!tab || !displayUrl) return;
+  const currentEntry = tab.history[tab.historyIndex];
+  if (currentEntry === displayUrl) return;
+  tab.history = tab.history.slice(0, tab.historyIndex + 1);
+  tab.history.push(displayUrl);
+  tab.historyIndex = tab.history.length - 1;
+}
+
+function clearLoadGuard() {
+  if (loadGuardTimer) {
+    clearTimeout(loadGuardTimer);
+    loadGuardTimer = null;
+  }
+}
+
+function onBridgeMessage(ev) {
+  const d = ev.data;
+  if (!d || d.ls !== 1) return;
+  const tab = findTab(ev.source);
+  if (!tab) return;
+  tab.bridge = true;
+
+  if (d.type === 'navigate' && d.href) {
+    loadUrlIntoTab(tab, d.href, { pushHistory: !d.reload });
+    return;
+  }
+
+  if (d.type === 'meta') {
+    clearLoadGuard();
+    tab.loading = false;
+    if (d.href && d.href !== 'about:blank' && d.href !== 'about:srcdoc') {
+      const cleanHref = toDisplayUrl(d.href);
+      if (cleanHref !== tab.url) {
+        tab.url = cleanHref;
+        pushTabHistory(tab, cleanHref);
+      }
+    }
+    if (!tab.pinTitle) {
+      tab.title = String(d.title || tab.url.replace(/^https?:\/\//, '')).slice(0, 60);
+    }
+    if (d.favicon) tab.favicon = d.favicon;
+    if ((tab.zoom || 100) !== 100) sendToTab(tab, 'zoom', { pct: tab.zoom });
+    remember(tab.url, tab.title);
+    emit();
+  } else if (d.type === 'devtools') {
+    tab.devtools = !!d.on;
+    emit();
+  } else if (d.type === 'need-devtools') {
+    loadDevtoolCode().then((code) => {
+      if (!code) return toast('Suger DevTool file missing (devtool/suger-dev.js). Reinstall the plugin.', 3500);
+      sendToTab(tab, 'devtools', { on: true, code });
+    });
+  } else if (d.type === 'devtools-error') {
+    toast('DevTool: ' + d.message, 3000);
+  }
+}
+
+export function initBridge() {
+  window.addEventListener('message', onBridgeMessage);
+}
+
+export function disposeBridge() {
+  clearLoadGuard();
+  window.removeEventListener('message', onBridgeMessage);
+}
+
+function applyFramePolicy(iframe) {
+  const s = getSettings();
+  if (s.frameSandboxing === true) {
+    iframe.setAttribute(
+      'sandbox',
+      'allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts'
+    );
+  } else {
+    iframe.removeAttribute('sandbox');
+  }
+}
+
+function clearIframeSrcdoc(iframe) {
+  try {
+    if (iframe.hasAttribute('srcdoc')) {
+      iframe.removeAttribute('srcdoc');
+    }
+  } catch (_) {}
+}
+
+async function loadUrlIntoTab(tab, rawUrl, opts = {}) {
+  clearLoadGuard();
+  const displayUrl = normalizeUrl(rawUrl);
+
+  if (opts.pushHistory !== false) {
+    pushTabHistory(tab, displayUrl);
+  }
+
+  tab.url = displayUrl;
+  tab.devtools = false;
+  applyFramePolicy(tab.iframe);
+
+  if (displayUrl === 'about:blank') {
+    tab.loading = false;
+    tab.title = 'New tab';
+    tab.favicon = null;
+    clearIframeSrcdoc(tab.iframe);
+    tab.iframe.src = 'about:blank';
+    emit();
+    return;
+  }
+
+  tab.loading = true;
+  if (!tab.pinTitle) tab.title = displayUrl.replace(/^https?:\/\//i, '');
+  try {
+    const host = new URL(displayUrl).hostname;
+    if (host && !isLocalUrl(displayUrl)) {
+      tab.favicon = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`;
+    }
+  } catch (_) {}
+  emit();
+
+  // Safety guard so loading bar never hangs forever
+  loadGuardTimer = setTimeout(() => {
+    if (tab.loading) {
+      tab.loading = false;
+      emit();
+    }
+  }, 8500);
+
+  // 1. Local Live Server files (127.0.0.1 / localhost) -> Load directly
+  if (isLocalUrl(displayUrl) || displayUrl.startsWith('blob:')) {
+    clearIframeSrcdoc(tab.iframe);
+    tab.iframe.src = displayUrl;
+    remember(displayUrl, tab.title);
+    emit();
+    return;
+  }
+
+  // 2. Media / Video / Social / Code Embeds (YouTube, Vimeo, Dailymotion, TikTok, CodePen, etc.)
+  const embedUrl = generateEmbedUrl(displayUrl);
+  if (embedUrl) {
+    clearIframeSrcdoc(tab.iframe);
+    tab.iframe.src = embedUrl;
+    remember(displayUrl, tab.title);
+    emit();
+    return;
+  }
+
+  // 3. Google Search / WebHP -> Native ?igu=1 mode (loads directly at full speed!)
+  const googleIguUrl = optimizeGoogleUrl(displayUrl);
+  if (googleIguUrl) {
+    clearIframeSrcdoc(tab.iframe);
+    tab.iframe.src = googleIguUrl;
+    remember(displayUrl, tab.title);
+    emit();
+    return;
+  }
+
+  const extMode = getSettings().externalSiteMode || 'proxy';
+
+  // 4. Direct iframe mode (without proxy)
+  if (extMode === 'inApp') {
+    clearIframeSrcdoc(tab.iframe);
+    tab.iframe.src = displayUrl;
+    remember(displayUrl, tab.title);
+    emit();
+    return;
+  }
+
+  // 5. Turbo Proxy Mode: Try Cordova Native HTTP Scraper first (Tri-Browser method — instant!)
+  if (hasCordovaHttp()) {
+    const st = getServerStatus();
+    const turboRes = await fetchViaCordovaTurbo(displayUrl, st.port || 8080);
+    if (turboRes.ok && turboRes.html) {
+      if (turboRes.finalUrl && turboRes.finalUrl !== tab.url) {
+        tab.url = turboRes.finalUrl;
+      }
+      tab.iframe.removeAttribute('src');
+      tab.iframe.srcdoc = turboRes.html;
+      remember(tab.url, tab.title);
+      emit();
+      return;
+    }
+    // If binary/video file (e.g. direct .mp4 / .webm / .pdf), load directly or via streaming proxy
+    if (turboRes.binary) {
+      clearIframeSrcdoc(tab.iframe);
+      tab.iframe.src = turboRes.finalUrl || displayUrl;
+      remember(displayUrl, tab.title);
+      emit();
+      return;
+    }
+  }
+
+  // 6. Fallback to Upgraded Node Streaming Proxy (/__proxy)
+  const st = getServerStatus();
+  const port = st.running && st.port ? st.port : await ensureProxyServer();
+  clearIframeSrcdoc(tab.iframe);
+  if (port) {
+    tab.iframe.src = `http://127.0.0.1:${port}/__proxy?url=${encodeURIComponent(displayUrl)}`;
+  } else {
+    tab.iframe.src = displayUrl;
+  }
+  remember(displayUrl, tab.title);
+  emit();
+}
+
+export function addTab(container, url, title) {
+  const id = nextId++;
+  const iframe = document.createElement('iframe');
+  iframe.className = 'ls-browser-frame';
+  iframe.setAttribute('allow', TURBO_IFRAME_ALLOW);
+  iframe.allowFullscreen = true;
+
+  const initialDisplay = url ? normalizeUrl(url) : 'about:blank';
+
+  const tab = {
+    id,
+    url: initialDisplay,
+    title: title || (initialDisplay === 'about:blank' ? 'New tab' : initialDisplay.replace(/^https?:\/\//i, '')),
+    iframe,
+    loading: initialDisplay !== 'about:blank',
+    favicon: null,
+    zoom: 100,
+    pinTitle: !!title,
+    history: [initialDisplay],
+    historyIndex: 0,
+  };
+
+  container.appendChild(iframe);
+  try {
+    tab.zoomHandler?.destroy?.();
+    tab.zoomHandler = new ZoomHandler(iframe);
+  } catch (e) {
+    console.warn('[LiveServer] ZoomHandler', e);
+  }
+  tabs.push(tab);
+  tabs.forEach((t) => {
+    if (t.iframe) t.iframe.style.display = t.id === id ? 'block' : 'none';
+  });
+  activeTabId = id;
+
+  iframe.addEventListener('load', () => {
+    clearLoadGuard();
+    tab.loading = false;
+    tab.devtools = false;
+    const w = directWin(tab);
+    if (w) {
+      try {
+        const winTarget = w.__LS_PROXY_TARGET__;
+        const rawHref = w.location.href;
+        const loc = winTarget || (rawHref !== 'about:srcdoc' ? toDisplayUrl(rawHref) : tab.url);
+        if (loc && loc !== 'about:blank' && loc !== 'about:srcdoc') {
+          if (loc !== tab.url) {
+            tab.url = loc;
+            pushTabHistory(tab, loc);
+          }
+        }
+        if (!tab.pinTitle) {
+          if (w.document.title) tab.title = w.document.title.slice(0, 60);
+          else if (tab.url !== 'about:blank') tab.title = tab.url.replace(/^https?:\/\//, '');
+        }
+        const link = w.document.querySelector('link[rel~="icon"]');
+        if (link?.href) tab.favicon = link.href;
+      } catch (_) {}
+    } else if (!tab.pinTitle && tab.url !== 'about:blank') {
+      tab.title = tab.url.replace(/^https?:\/\//, '');
+    }
+
+    if (!tab.favicon && /^https?:/i.test(tab.url)) {
+      try {
+        const host = new URL(tab.url).hostname;
+        tab.favicon = isLocalUrl(tab.url)
+          ? new URL('/favicon.ico', tab.url).href
+          : `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`;
+      } catch (_) {}
+    }
+    applyZoom(tab);
+    remember(tab.url, tab.title);
+    emit();
+  });
+
+  if (initialDisplay === 'about:blank') {
+    applyFramePolicy(iframe);
+    iframe.src = 'about:blank';
+    emit();
+  } else {
+    loadUrlIntoTab(tab, initialDisplay, { pushHistory: false });
+  }
+
+  return tab;
+}
+
+export function duplicateActive(container) {
+  const t = getActiveTab();
+  if (!t) return null;
+  return addTab(container, t.url, t.title);
+}
+
+export function activateTab(id) {
+  if (!tabs.some((t) => t.id === id)) return;
+  activeTabId = id;
+  tabs.forEach((t) => {
+    if (t.iframe) t.iframe.style.display = t.id === id ? 'block' : 'none';
+  });
+  emit();
+}
+
+export function closeTab(id) {
+  const idx = tabs.findIndex((t) => t.id === id);
+  if (idx < 0) return tabs.length;
+  const [t] = tabs.splice(idx, 1);
+  if (t.id === activeTabId) clearLoadGuard();
+  try {
+    t.zoomHandler?.destroy?.();
+    t.iframe?.remove();
+  } catch (_) {}
+  if (activeTabId === id) {
+    if (tabs.length) {
+      const next = tabs[Math.min(idx, tabs.length - 1)];
+      activateTab(next.id);
+    } else {
+      activeTabId = null;
+      emit();
+    }
+  } else {
+    emit();
+  }
+  return tabs.length;
+}
+
+export function closeAllTabs() {
+  clearLoadGuard();
+  tabs.forEach((t) => {
+    try {
+      t.zoomHandler?.destroy?.();
+      t.iframe?.remove();
+    } catch (_) {}
+  });
+  tabs = [];
+  activeTabId = null;
+  emit();
+}
+
+export function navigateActive(url) {
+  const t = getActiveTab();
+  if (!t?.iframe) return;
+  loadUrlIntoTab(t, url, { pushHistory: true });
+}
+
+export function reloadActive() {
+  const t = getActiveTab();
+  if (!t?.iframe) return;
+  if (t.url === 'about:blank') {
+    emit();
+    return;
+  }
+  loadUrlIntoTab(t, t.url, { pushHistory: false });
+}
+
+export function stopActive() {
+  clearLoadGuard();
+  const t = getActiveTab();
+  if (!t?.iframe) return;
+  const w = directWin(t);
+  if (w) {
+    try {
+      w.stop();
+    } catch (_) {}
+  } else sendToTab(t, 'stop');
+  t.loading = false;
+  emit();
+}
+
+export function historyActive(dir) {
+  const t = getActiveTab();
+  if (!t) return;
+
+  if (dir < 0 && t.historyIndex > 0) {
+    t.historyIndex -= 1;
+    const prevUrl = t.history[t.historyIndex];
+    loadUrlIntoTab(t, prevUrl, { pushHistory: false });
+    return;
+  }
+
+  if (dir > 0 && t.historyIndex < t.history.length - 1) {
+    t.historyIndex += 1;
+    const nextUrl = t.history[t.historyIndex];
+    loadUrlIntoTab(t, nextUrl, { pushHistory: false });
+    return;
+  }
+}
+
+export function findInActive(q, back) {
+  const t = getActiveTab();
+  if (!t || !q) return;
+  const w = directWin(t);
+  if (w) {
+    try {
+      w.find?.(q, false, !!back, true, false, false, false);
+      return;
+    } catch (_) {}
+  }
+  sendToTab(t, 'find', { q, back: !!back });
+}
+
+export function printActive() {
+  const t = getActiveTab();
+  if (!t) return false;
+  const w = directWin(t);
+  if (w) {
+    try {
+      w.print();
+      return true;
+    } catch (_) {}
+  }
+  return sendToTab(t, 'print');
+}
+
+export function toggleDevtoolsActive() {
+  const t = getActiveTab();
+  if (!t || !t.bridge) return false;
+  return sendToTab(t, 'devtools', { on: !t.devtools });
+}
+
+export function setZoomActive(pct) {
+  const t = getActiveTab();
+  if (!t) return 100;
+  t.zoom = Math.min(500, Math.max(25, Math.round(pct)));
+  applyZoom(t);
+  emit();
+  return t.zoom;
+}
+
+export function renderTabStrip(tabsEl) {
+  if (!tabsEl) return;
+  tabsEl.innerHTML = '';
+  tabs.forEach((t) => {
+    const el = document.createElement('div');
+    el.className = 'ls-tab' + (t.id === activeTabId ? ' is-active' : '') + (t.loading ? ' is-loading' : '');
+    el.setAttribute('role', 'tab');
+    el.title = t.title || '';
+
+    const fav = document.createElement('span');
+    fav.className = 'ls-fav';
+    if (t.loading) {
+      fav.classList.add('is-spin');
+    } else if (t.favicon) {
+      const img = document.createElement('img');
+      img.src = t.favicon;
+      img.alt = '';
+      img.addEventListener('error', () => {
+        fav.innerHTML = icon(I.globe, 14);
+      });
+      fav.appendChild(img);
+    } else {
+      fav.innerHTML = icon(I.globe, 14);
+    }
+    el.appendChild(fav);
+
+    const label = document.createElement('span');
+    label.className = 'ls-tab-label';
+    label.textContent = t.title || 'Tab';
+    el.appendChild(label);
+
+    const x = document.createElement('span');
+    x.className = 'ls-tab-x';
+    x.setAttribute('role', 'button');
+    x.title = 'Close tab';
+    x.innerHTML = icon(I.close, 12);
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTab(t.id);
+    });
+    el.appendChild(x);
+
+    el.addEventListener('click', () => activateTab(t.id));
+    tabsEl.appendChild(el);
+  });
+}
+
+/** Open a static HTML srcdoc tab (e.g. view-source) without network load hang */
+export function addSourceTab(container, title, htmlSrcdoc) {
+  const tab = addTab(container, 'about:blank', title || 'view-source');
+  tab.pinTitle = true;
+  tab.loading = false;
+  tab.url = title || 'view-source';
+  try {
+    tab.iframe.removeAttribute('sandbox');
+  } catch (_) {}
+  try {
+    tab.iframe.srcdoc = htmlSrcdoc;
+  } catch (e) {
+    const blob = new Blob([htmlSrcdoc], { type: 'text/html;charset=utf-8' });
+    tab.iframe.src = URL.createObjectURL(blob);
+  }
+  tab.loading = false;
+  emit();
+  return tab;
+}

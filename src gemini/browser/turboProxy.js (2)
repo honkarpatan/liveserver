@@ -1,0 +1,789 @@
+/**
+ * browser/turboProxy.js
+ * Tri-Browser Engine + Next-Gen Upgrades for Live Server Browser:
+ *  1. Google Native Iframe Unlocker (?igu=1) — instant native Google Search & browsing
+ *  2. Universal Video & Social Embed Converter (YouTube, Shorts, Playlists, Vimeo, Dailymotion,
+ *     Facebook, Instagram, Twitter/X, TikTok, Twitch, Spotify, CodePen, JSFiddle, Reddit)
+ *  3. Cordova Native HTTP (cordova.plugin.http) Client-Side Scraper with real Sec-Ch-Ua Client Hints,
+ *     <base href> direct CDN asset loading, in-page fetch() + XMLHttpRequest CORS bypass,
+ *     SPA pushState/replaceState protection, and seamless link/form navigation interception.
+ */
+import { getSettings } from '../core/settings.js';
+
+export const TURBO_IFRAME_ALLOW = [
+  'autoplay',
+  'encrypted-media',
+  'picture-in-picture',
+  'fullscreen',
+  'clipboard-read',
+  'clipboard-write',
+  'accelerometer',
+  'gyroscope',
+  'web-share',
+  'display-capture',
+  'ch-ua',
+  'ch-ua-mobile',
+  'ch-ua-platform',
+  'ch-ua-arch',
+  'ch-ua-bitness',
+  'ch-ua-full-version',
+  'ch-ua-full-version-list',
+  'ch-ua-model',
+  'ch-ua-platform-version',
+  'ch-viewport-width',
+  'ch-viewport-height',
+  'ch-dpr',
+].join('; ');
+
+/**
+ * Converts Google URLs to include ?igu=1 (Google's official iframe-allowed flag, used by tri-browser)
+ * so Google Search & WebHP load natively inside the iframe at 100% speed without bot challenges.
+ */
+export function optimizeGoogleUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (/^(www\.|m\.)?google\.[a-z.]+$/i.test(u.hostname)) {
+      if (u.pathname === '/' || u.pathname === '') {
+        u.pathname = '/webhp';
+      }
+      if (u.pathname === '/webhp' || u.pathname === '/search') {
+        u.searchParams.set('igu', '1');
+        return u.href;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Upgraded version of tri-browser's generateEmbedUrl().
+ * Converts video, social, audio, and code-playground links into high-speed embed players.
+ */
+export function generateEmbedUrl(rawUrl) {
+  let props;
+  try {
+    props = new URL(rawUrl);
+  } catch (_) {
+    return '';
+  }
+
+  const s = getSettings();
+  const knownParams = new URLSearchParams();
+  const currentTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  const playerConfig = {
+    flags: ['autoplay', 'loop', 'mute'],
+    states: [!!s.autoplayVideos, !!s.loopPlaylist, !!s.startMuted],
+  };
+
+  let isShortUrl = false;
+  let embedUrl = '';
+  let paramString = '';
+  const host = props.hostname.toLowerCase();
+  const pathname = props.pathname;
+
+  // Already an embed URL
+  if (
+    pathname.includes('/embed/') ||
+    host.endsWith('geo.dailymotion.com') ||
+    host.endsWith('player.vimeo.com') ||
+    host.endsWith('player.twitch.tv')
+  ) {
+    return rawUrl;
+  }
+
+  // 1. CodePen
+  if (host.endsWith('codepen.io') && pathname.includes('/pen/')) {
+    const [, username, , slugHash] = pathname.split('/');
+    if (!username || !slugHash) return '';
+    embedUrl = `https://codepen.io/${username}/embed/${slugHash}`;
+    delete playerConfig.flags;
+    knownParams.append('default-tab', 'result');
+    knownParams.append('theme-id', currentTheme);
+    knownParams.append('preview', 'true');
+    knownParams.append('editable', 'false');
+    knownParams.append('animations', 'run');
+  }
+  // 2. JSFiddle
+  else if (host.endsWith('jsfiddle.net')) {
+    const [, username, fiddleId] = pathname.split('/');
+    if (!username || !fiddleId) return '';
+    embedUrl = `https://jsfiddle.net/${username}/${fiddleId}/embed/result,html,css,js,resources/${currentTheme}`;
+    delete playerConfig.flags;
+  }
+  // 3. Dailymotion
+  else if (host.endsWith('dailymotion.com') || host === 'dai.ly') {
+    const parts = pathname.split('/').filter(Boolean);
+    const kind = host === 'dai.ly' ? 'video' : parts[0];
+    const id = host === 'dai.ly' ? parts[0] : parts[1];
+    const time = props.searchParams.get('startTime') || props.searchParams.get('start');
+    if (!id || (kind !== 'video' && kind !== 'playlist')) return '';
+    knownParams.append(kind, id);
+    embedUrl = 'https://geo.dailymotion.com/player.html';
+    if (time) knownParams.append('start', String(parseInt(time, 10) || 0));
+  }
+  // 4. Facebook Videos / Reels / Posts
+  else if (
+    host.endsWith('facebook.com') ||
+    host.endsWith('fb.com') ||
+    (host.endsWith('fb.watch') && (isShortUrl = true))
+  ) {
+    const isVideo =
+      isShortUrl ||
+      pathname.includes('/reel/') ||
+      pathname.includes('/videos/') ||
+      pathname.includes('/watch');
+    if (!isVideo && !pathname.includes('/posts/') && !pathname.includes('/permalink')) return '';
+    embedUrl = `https://www.facebook.com/plugins/${isVideo ? 'video' : 'post'}.php`;
+    knownParams.append('allowfullscreen', 'true');
+    knownParams.append('container_width', String(window.innerWidth || screen.availWidth || 380));
+    knownParams.append('href', rawUrl);
+    knownParams.append('lazy', 'true');
+    knownParams.append('locale', (navigator.language || 'en_US').replace('-', '_'));
+    knownParams.append('show_captions', 'true');
+    knownParams.append('show_text', 'true');
+    delete playerConfig.flags[1];
+    delete playerConfig.flags[2];
+  }
+  // 5. Instagram Posts & Reels
+  else if (host.endsWith('instagram.com') && (pathname.includes('/p/') || pathname.includes('/reel/') || pathname.includes('/reels/'))) {
+    const parts = pathname.split('/').filter(Boolean);
+    let kind = parts[0];
+    let code = parts[1];
+    if (parts.length >= 3 && (parts[1] === 'p' || parts[1] === 'reel' || parts[1] === 'reels')) {
+      kind = parts[1];
+      code = parts[2];
+    }
+    if (kind === 'reels') kind = 'reel';
+    if (!kind || !code) return '';
+    embedUrl = `https://www.instagram.com/${kind}/${code}/embed/captioned/`;
+    knownParams.append('cr', '1');
+    knownParams.append('theme', currentTheme);
+    knownParams.append('wp', String(window.innerWidth || screen.availWidth || 380));
+    delete playerConfig.flags;
+  }
+  // 6. Twitter / X
+  else if (host.endsWith('twitter.com') || host.endsWith('x.com')) {
+    const parts = pathname.split('/').filter(Boolean);
+    const kind = parts[1];
+    const id = parts[2];
+    if (!id || (kind !== 'status' && kind !== 'post')) return '';
+    embedUrl = 'https://platform.twitter.com/embed/Tweet.html';
+    delete playerConfig.flags;
+    knownParams.append('id', id);
+    knownParams.append('dnt', 'true');
+    knownParams.append('embedId', 'twitter-widget-0');
+    knownParams.append('frame', 'true');
+    knownParams.append('hideCard', 'false');
+    knownParams.append('hideThread', 'false');
+    knownParams.append('lang', (navigator.language || 'en').split('-')[0]);
+    knownParams.append('theme', currentTheme);
+  }
+  // 7. Vimeo
+  else if (host.endsWith('vimeo.com') && !host.includes('player')) {
+    const videoId = pathname.replace(/^\/+/, '').split('/')[0];
+    if (!/^\d+$/.test(videoId)) return '';
+    embedUrl = `https://player.vimeo.com/video/${videoId}`;
+    const oldToken = props.searchParams.get('h');
+    const privacyToken = props.searchParams.get('turnstile');
+    if (privacyToken) knownParams.append('turnstile', privacyToken);
+    else if (oldToken) knownParams.append('h', oldToken);
+    knownParams.append('autopause', '1');
+    knownParams.append('dnt', '1');
+    playerConfig.flags[2] = 'muted';
+  }
+  // 8. YouTube (Videos, Shorts, Playlists, Search, Music)
+  else if (host.endsWith('youtube.com') || (host.endsWith('youtu.be') && (isShortUrl = true))) {
+    embedUrl = 'https://www.youtube.com/embed/';
+    const time = props.searchParams.get('t') || props.searchParams.get('start');
+    const playlistId = props.searchParams.get('list');
+    const search = props.searchParams.get('search_query');
+    let videoId = '';
+    let startSeconds = 0;
+
+    if (isShortUrl) {
+      videoId = pathname.slice(1).split('/')[0];
+    } else if (pathname.startsWith('/shorts/')) {
+      videoId = pathname.split('/shorts/')[1]?.split('/')[0] || '';
+    } else if (pathname.startsWith('/live/')) {
+      videoId = pathname.split('/live/')[1]?.split('/')[0] || '';
+    } else if (pathname.startsWith('/watch')) {
+      videoId = props.searchParams.get('v') || '';
+    }
+
+    if (videoId) {
+      embedUrl += videoId;
+      if (playlistId) knownParams.append('list', playlistId);
+      else if (s.loopPlaylist) knownParams.append('playlist', videoId);
+    } else if (playlistId) {
+      embedUrl += 'videoseries';
+      knownParams.append('list', playlistId);
+    } else if (search) {
+      embedUrl = embedUrl.slice(0, -1);
+      knownParams.append('list', search);
+      knownParams.append('listType', 'search');
+    } else {
+      return '';
+    }
+
+    if (time) {
+      if (Number.isFinite(Number(time))) {
+        startSeconds = parseInt(time, 10);
+      } else {
+        const rMatch = time.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?/);
+        if (rMatch) {
+          const [, h = 0, m = 0, sec = 0] = rMatch.map(Number);
+          startSeconds = (h || 0) * 3600 + (m || 0) * 60 + (sec || 0);
+        }
+      }
+    }
+    if (startSeconds > 0) knownParams.append('start', String(startSeconds));
+    knownParams.append('playsinline', '1');
+    knownParams.append('rel', '0');
+  }
+  // 9. TikTok Videos
+  else if (host.endsWith('tiktok.com') && pathname.includes('/video/')) {
+    const m = pathname.match(/\/video\/(\d+)/);
+    if (!m) return '';
+    return `https://www.tiktok.com/embed/v2/${m[1]}`;
+  }
+  // 10. Twitch Channels & Videos
+  else if (host.endsWith('twitch.tv')) {
+    const parts = pathname.split('/').filter(Boolean);
+    if (!parts.length) return '';
+    const parentHost = location.hostname || 'localhost';
+    if (parts[0] === 'videos' && parts[1]) {
+      return `https://player.twitch.tv/?video=${parts[1]}&parent=${parentHost}&autoplay=${s.autoplayVideos ? 'true' : 'false'}`;
+    }
+    return `https://player.twitch.tv/?channel=${parts[0]}&parent=${parentHost}&autoplay=${s.autoplayVideos ? 'true' : 'false'}`;
+  }
+  // 11. Spotify Tracks / Playlists / Albums
+  else if (host === 'open.spotify.com' && /^\/(track|album|playlist|episode|show)\//.test(pathname)) {
+    return `https://open.spotify.com/embed${pathname}`;
+  }
+  else {
+    return '';
+  }
+
+  playerConfig.flags?.forEach((key, index) => {
+    if (key) knownParams.append(key, String(Number(playerConfig.states[index] ?? false)));
+  });
+
+  if ([...knownParams.keys()].length > 0) {
+    paramString = '?' + knownParams.toString();
+  }
+
+  return embedUrl + paramString + props.hash;
+}
+
+/**
+ * Checks if Acode's native Cordova HTTP plugin is available (same engine used by tri-browser).
+ */
+export function hasCordovaHttp() {
+  return typeof window !== 'undefined' && typeof window.cordova?.plugin?.http?.sendRequest === 'function';
+}
+
+/**
+ * Build Client-Hints headers just like tri-browser's proxy.html.
+ */
+function buildClientHeaders(targetOrigin) {
+  const hdrs = {
+    'User-Agent':
+      navigator.userAgent ||
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+    'Accept':
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': navigator.language || 'en-US,en;q=0.9',
+  };
+  try {
+    if (navigator.userAgentData) {
+      hdrs['Sec-Ch-Ua-Mobile'] = '?' + Number(Boolean(navigator.userAgentData.mobile));
+      if (navigator.userAgentData.platform) {
+        hdrs['Sec-Ch-Ua-Platform'] = '"' + navigator.userAgentData.platform + '"';
+      }
+      if (Array.isArray(navigator.userAgentData.brands) && navigator.userAgentData.brands.length) {
+        hdrs['Sec-Ch-Ua'] = navigator.userAgentData.brands
+          .map((b) => `"${b.brand}";v="${b.version}"`)
+          .join(', ');
+      }
+    }
+  } catch (_) {}
+  if (targetOrigin) {
+    hdrs['Referer'] = targetOrigin + '/';
+  }
+  return hdrs;
+}
+
+/**
+ * Fetch a page via Acode's native Cordova HTTP plugin (tri-browser method)
+ * and transform it with <base href> + direct CDN asset links + in-page runtime bridge.
+ * Returns { ok: true, html, finalUrl } or { ok: false, error }.
+ */
+export function fetchViaCordovaTurbo(targetUrl, proxyPort = null) {
+  return new Promise((resolve) => {
+    if (!hasCordovaHttp()) {
+      return resolve({ ok: false, error: 'cordova.plugin.http not available' });
+    }
+
+    let base;
+    try {
+      base = new URL(targetUrl);
+    } catch (e) {
+      return resolve({ ok: false, error: 'Invalid URL' });
+    }
+
+    const headers = buildClientHeaders(base.origin);
+
+    window.cordova.plugin.http.sendRequest(
+      base.origin + base.pathname,
+      {
+        method: 'get',
+        params: Object.fromEntries(base.searchParams),
+        responseType: 'arraybuffer',
+        timeout: 25,
+        followRedirect: true,
+        headers,
+      },
+      (response) => {
+        try {
+          const finalUrl = response.url || targetUrl;
+          const finalParsed = new URL(finalUrl);
+          const ctHeader =
+            response.headers?.['content-type'] ||
+            response.headers?.['Content-Type'] ||
+            'text/html; charset=utf-8';
+          const mimetype = ctHeader.split(';')[0].trim().toLowerCase();
+          const charsetMatch = ctHeader.match(/charset=([^;\s]+)/i);
+          const charset = charsetMatch ? charsetMatch[1].replace(/["']/g, '') : 'utf-8';
+
+          // Non-HTML binary or media content -> let direct URL or streaming proxy handle it
+          if (
+            !mimetype.includes('html') &&
+            !mimetype.includes('xml') &&
+            !mimetype.startsWith('text/')
+          ) {
+            return resolve({ ok: false, binary: true, finalUrl, mimetype });
+          }
+
+          let rawHtml = '';
+          try {
+            rawHtml = new TextDecoder(charset).decode(response.data);
+          } catch (_) {
+            rawHtml = new TextDecoder('utf-8').decode(response.data);
+          }
+
+          const transformed = transformHtmlLikeTriBrowser(rawHtml, finalParsed.href, proxyPort);
+          resolve({
+            ok: true,
+            html: transformed,
+            finalUrl: finalParsed.href,
+          });
+        } catch (err) {
+          resolve({ ok: false, error: String(err?.message || err) });
+        }
+      },
+      (errResp) => {
+        resolve({
+          ok: false,
+          status: errResp?.status || 0,
+          error: errResp?.error || 'Native request failed',
+        });
+      }
+    );
+  });
+}
+
+/**
+ * Transforms HTML using Tri-Browser's DOMParser + <base href> technique,
+ * PLUS our upgrades (CORS-free fetch/XHR bridge, SPA pushState protection,
+ * and link/form click interceptor so subsequent clicks stay inside the browser).
+ */
+export function transformHtmlLikeTriBrowser(rawHtml, finalUrl, proxyPort = null) {
+  const url = new URL(finalUrl);
+  const origin = url.origin;
+  const baseDirHref = origin + url.pathname.replace(/[^/]*$/, '');
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(rawHtml, 'text/html');
+
+  // Remove restrictive CSP & X-Frame meta tags
+  doc.querySelectorAll('meta[http-equiv]').forEach((m) => {
+    const eq = (m.getAttribute('http-equiv') || '').toLowerCase();
+    if (eq === 'content-security-policy' || eq === 'x-frame-options') {
+      m.remove();
+    }
+  });
+
+  // Remove SRI integrity & nonce attributes so rewritten scripts/styles never fail check
+  doc.querySelectorAll('[integrity], [nonce]').forEach((el) => {
+    el.removeAttribute('integrity');
+    el.removeAttribute('nonce');
+  });
+
+  // 1. Configure <base href> exactly like tri-browser so relative links/assets resolve to the real CDN
+  let baseEl = doc.querySelector('head base');
+  if (baseEl) {
+    const rawBase = baseEl.getAttribute('href') || '';
+    if (!rawBase) {
+      baseEl.setAttribute('href', baseDirHref);
+    } else {
+      try {
+        baseEl.setAttribute('href', new URL(rawBase, finalUrl).href);
+      } catch (_) {
+        baseEl.setAttribute('href', baseDirHref);
+      }
+    }
+  } else {
+    baseEl = doc.createElement('base');
+    baseEl.setAttribute('href', baseDirHref);
+    if (doc.head) doc.head.prepend(baseEl);
+  }
+
+  // 2. Make root-relative links/media/assets point directly to the target CDN (tri-browser speed secret!)
+  const resolveAttr = (el, attr) => {
+    const val = el.getAttribute(attr);
+    if (!val) return;
+    const s = val.trim();
+    if (
+      !s ||
+      s.startsWith('#') ||
+      s.startsWith('data:') ||
+      s.startsWith('blob:') ||
+      s.startsWith('javascript:') ||
+      s.startsWith('mailto:') ||
+      s.startsWith('tel:')
+    ) {
+      return;
+    }
+    try {
+      const abs = new URL(s, finalUrl).href;
+      el.setAttribute(attr, abs);
+    } catch (_) {}
+  };
+
+  doc.querySelectorAll('link[href], a[href], area[href]').forEach((el) => resolveAttr(el, 'href'));
+  doc.querySelectorAll('script[src], img[src], video[src], audio[src], source[src], track[src], embed[src], iframe[src]').forEach((el) =>
+    resolveAttr(el, 'src')
+  );
+  doc.querySelectorAll('video[poster]').forEach((el) => resolveAttr(el, 'poster'));
+  doc.querySelectorAll('form[action]').forEach((el) => resolveAttr(el, 'action'));
+
+  // Rewrite srcset so responsive images load directly from CDN
+  doc.querySelectorAll('[srcset], [imagesrcset]').forEach((el) => {
+    ['srcset', 'imagesrcset'].forEach((attr) => {
+      const val = el.getAttribute(attr);
+      if (!val) return;
+      const updated = val
+        .split(',')
+        .map((part) => {
+          const trimmed = part.trim();
+          if (!trimmed) return part;
+          const sp = trimmed.search(/\s/);
+          const u = sp === -1 ? trimmed : trimmed.slice(0, sp);
+          const desc = sp === -1 ? '' : trimmed.slice(sp);
+          try {
+            return new URL(u, finalUrl).href + desc;
+          } catch (_) {
+            return part;
+          }
+        })
+        .join(', ');
+      el.setAttribute(attr, updated);
+    });
+  });
+
+  // 3. Inject our Upgraded Turbo Runtime Script into <head>
+  const runtimeScript = doc.createElement('script');
+  runtimeScript.textContent = buildInjectedTurboRuntime(finalUrl, proxyPort);
+  if (doc.head) {
+    doc.head.insertBefore(runtimeScript, baseEl.nextSibling);
+  } else if (doc.documentElement) {
+    doc.documentElement.prepend(runtimeScript);
+  }
+
+  return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+}
+
+/**
+ * Injected runtime inside the iframe:
+ * - Overrides window.fetch & XMLHttpRequest using top.cordova.plugin.http (from tri-browser proxy.html)
+ *   with automatic fallback to Node /__proxy so cross-origin APIs work without CORS errors!
+ * - Prevents history.pushState / replaceState from throwing SecurityError on srcdoc
+ * - Intercepts <a> clicks, <form> submits, and window.open so navigation stays inside the tab!
+ */
+function buildInjectedTurboRuntime(targetUrl, proxyPort) {
+  let origin = '';
+  try {
+    origin = new URL(targetUrl).origin;
+  } catch (_) {}
+
+  return `
+(function() {
+  var P = window.parent || window.top;
+  window.__LS_PROXY_TARGET__ = ${JSON.stringify(targetUrl)};
+  window.__LS_PROXY_ORIGIN__ = ${JSON.stringify(origin)};
+  window.__LS_PROXY_PORT__ = ${JSON.stringify(proxyPort || 8080)};
+  window.url = new URL(window.__LS_PROXY_TARGET__);
+
+  try {
+    if (window.top && window.top.console) {
+      window.console = window.top.console;
+    }
+  } catch (e) {}
+
+  function postToBrowser(msg) {
+    try {
+      msg.ls = 1;
+      P.postMessage(msg, '*');
+    } catch (e) {}
+  }
+
+  function resolveAgainstTarget(raw) {
+    if (!raw || typeof raw !== 'string') return '';
+    var s = raw.trim();
+    if (!s) return window.__LS_PROXY_TARGET__;
+    var idx = s.indexOf('/__proxy?url=');
+    if (idx !== -1) {
+      try {
+        return decodeURIComponent(s.slice(idx + '/__proxy?url='.length).split('&')[0]);
+      } catch (e) {}
+    }
+    try {
+      return new URL(s, window.__LS_PROXY_TARGET__).href;
+    } catch (e) {
+      return s;
+    }
+  }
+
+  function sendMeta() {
+    var l = document.querySelector('link[rel~="icon"]');
+    var fav = (l && l.href) ? l.href : (window.__LS_PROXY_ORIGIN__ + '/favicon.ico');
+    postToBrowser({
+      type: 'meta',
+      href: window.__LS_PROXY_TARGET__,
+      title: document.title || window.url.hostname || '',
+      favicon: fav
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', sendMeta);
+  window.addEventListener('load', sendMeta);
+  setTimeout(sendMeta, 120);
+
+  try {
+    var titleEl = document.querySelector('title');
+    if (titleEl) {
+      new MutationObserver(sendMeta).observe(titleEl, { childList: true, characterData: true, subtree: true });
+    }
+  } catch (e) {}
+
+  // 1. Safe history.pushState / replaceState (prevents SecurityError on srcdoc / proxied SPAs)
+  try {
+    var origPush = history.pushState;
+    var origReplace = history.replaceState;
+    history.pushState = function(state, title, nextUrl) {
+      if (nextUrl != null) {
+        window.__LS_PROXY_TARGET__ = resolveAgainstTarget(String(nextUrl));
+        window.url = new URL(window.__LS_PROXY_TARGET__);
+        sendMeta();
+      }
+      try {
+        return origPush.call(this, state, title);
+      } catch (e) {}
+    };
+    history.replaceState = function(state, title, nextUrl) {
+      if (nextUrl != null) {
+        window.__LS_PROXY_TARGET__ = resolveAgainstTarget(String(nextUrl));
+        window.url = new URL(window.__LS_PROXY_TARGET__);
+        sendMeta();
+      }
+      try {
+        return origReplace.call(this, state, title);
+      } catch (e) {}
+    };
+  } catch (e) {}
+
+  // 2. Prevent ServiceWorker registration errors inside srcdoc/proxy
+  try {
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.register = function() {
+        return Promise.resolve({ scope: '/' });
+      };
+    }
+  } catch (e) {}
+
+  // 3. Tri-Browser Cordova Native HTTP fetch() override (bypasses CORS for in-page API calls!)
+  var nativeHttp = null;
+  try {
+    nativeHttp = window.top && window.top.cordova && window.top.cordova.plugin && window.top.cordova.plugin.http;
+  } catch (e) {}
+
+  var origFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (nativeHttp && typeof nativeHttp.sendRequest === 'function') {
+    window.fetch = function(init, options) {
+      var targetHref = '';
+      if (typeof init === 'string') {
+        targetHref = resolveAgainstTarget(init);
+      } else if (init && typeof init.url === 'string') {
+        targetHref = resolveAgainstTarget(init.url);
+      } else {
+        targetHref = resolveAgainstTarget(String(init || ''));
+      }
+
+      if (!/^https?:\\/\\//i.test(targetHref)) {
+        return origFetch ? origFetch(init, options) : Promise.reject(new Error('Unsupported fetch URL'));
+      }
+
+      var req = new Request(targetHref, options || {});
+      var parsed = new URL(req.url);
+
+      return new Promise(async function(resolve, reject) {
+        try {
+          var plainHeaders = {
+            'User-Agent': navigator.userAgent,
+            'Referer': window.__LS_PROXY_ORIGIN__ + '/'
+          };
+          req.headers.forEach(function(v, k) { plainHeaders[k] = v; });
+
+          var data = {};
+          var serializer = 'utf8';
+          if (req.body && req.method !== 'GET' && req.method !== 'HEAD') {
+            data = await req.text();
+          }
+
+          nativeHttp.sendRequest(
+            parsed.origin + parsed.pathname,
+            {
+              method: (req.method || 'GET').toLowerCase(),
+              params: Object.fromEntries(parsed.searchParams),
+              data: data,
+              serializer: serializer,
+              responseType: 'arraybuffer',
+              timeout: 25,
+              followRedirect: true,
+              headers: plainHeaders
+            },
+            function(resp) {
+              var resObj = new Response(resp.data, {
+                status: resp.status || 200,
+                headers: new Headers(resp.headers || {})
+              });
+              Object.defineProperty(resObj, 'url', { value: resp.url || parsed.href });
+              resolve(resObj);
+            },
+            function(errResp) {
+              if (errResp && errResp.status > 0) {
+                var resObj = new Response(errResp.data || null, {
+                  status: errResp.status,
+                  headers: new Headers(errResp.headers || {})
+                });
+                resolve(resObj);
+              } else if (origFetch) {
+                origFetch(targetHref, options).then(resolve).catch(reject);
+              } else {
+                reject(new DOMException(errResp && errResp.error || 'Network error', 'FetchError'));
+              }
+            }
+          );
+        } catch (err) {
+          if (origFetch) origFetch(targetHref, options).then(resolve).catch(reject);
+          else reject(err);
+        }
+      });
+    };
+  }
+
+  // 4. Intercept <a> link clicks & <form> submissions so navigation stays inside our browser tab
+  document.addEventListener('click', function(e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var rawHref = a.getAttribute('href') || '';
+    if (!rawHref || rawHref.charAt(0) === '#' || /^javascript:/i.test(rawHref)) return;
+    if (/^(mailto:|tel:|intent:)/i.test(rawHref)) return;
+    var resolved = resolveAgainstTarget(rawHref);
+    if (/^https?:\\/\\//i.test(resolved)) {
+      e.preventDefault();
+      e.stopPropagation();
+      postToBrowser({ type: 'navigate', href: resolved });
+    }
+  }, true);
+
+  function handleFormNavigate(form) {
+    if (!form) return false;
+    var rawAction = form.getAttribute('action') || window.__LS_PROXY_TARGET__;
+    var targetAction = resolveAgainstTarget(rawAction);
+    var method = (form.getAttribute('method') || form.method || 'GET').toUpperCase();
+    if (method === 'GET') {
+      try {
+        var u = new URL(targetAction);
+        var fd = new FormData(form);
+        fd.forEach(function(v, k) {
+          if (typeof v === 'string') u.searchParams.set(k, v);
+        });
+        postToBrowser({ type: 'navigate', href: u.href });
+        return true;
+      } catch (err) {}
+    }
+    return false;
+  }
+
+  document.addEventListener('submit', function(e) {
+    if (handleFormNavigate(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
+
+  try {
+    var origSubmit = HTMLFormElement.prototype.submit;
+    HTMLFormElement.prototype.submit = function() {
+      if (handleFormNavigate(this)) return;
+      return origSubmit.apply(this, arguments);
+    };
+  } catch (e) {}
+
+  window.open = function(u) {
+    if (u) {
+      var next = resolveAgainstTarget(String(u));
+      if (/^https?:\\/\\//i.test(next)) {
+        postToBrowser({ type: 'navigate', href: next });
+      }
+    }
+    return window;
+  };
+
+  // 5. Handle parent commands (reload, zoom, find, print, devtools)
+  var dtOn = false;
+  window.addEventListener('message', function(e) {
+    var d = e.data;
+    if (!d || d.ls !== 1 || e.source !== P) return;
+    try {
+      if (d.cmd === 'reload') postToBrowser({ type: 'navigate', href: window.__LS_PROXY_TARGET__, reload: true });
+      else if (d.cmd === 'stop') window.stop();
+      else if (d.cmd === 'zoom') document.documentElement.style.zoom = String((d.pct || 100) / 100);
+      else if (d.cmd === 'print') window.print();
+      else if (d.cmd === 'find') postToBrowser({ type: 'found', ok: !!window.find(d.q, false, !!d.back, true, false, false, false) });
+      else if (d.cmd === 'ping') sendMeta();
+      else if (d.cmd === 'devtools') {
+        if (d.on) {
+          if (!window.suger) {
+            if (!d.code) { postToBrowser({ type: 'need-devtools' }); return; }
+            var s = document.createElement('script');
+            s.textContent = d.code;
+            (document.head || document.documentElement).appendChild(s);
+          }
+          if (window.suger) {
+            if (!window.__lsDtInit) { window.__lsDtInit = 1; window.suger.init(); }
+            else window.suger.show();
+            dtOn = true;
+          }
+        } else if (window.suger) {
+          window.suger.hide();
+          dtOn = false;
+        }
+        postToBrowser({ type: 'devtools', on: dtOn });
+      }
+    } catch (err) {}
+  });
+})();
+`;
+}
