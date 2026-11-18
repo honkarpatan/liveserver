@@ -41,7 +41,10 @@ export function safSpecToFs(spec) {
   const tail = rest ? '/' + rest : '';
   if (vol === 'primary') return '/sdcard' + tail;
   if (vol === 'home') return '/sdcard/Documents' + tail;
-  if (/^[0-9A-F]{4}-[0-9A-F]{4}$/i.test(vol)) return '/storage/' + vol + tail;
+  if (/^[0-9A-F]{4}-[0-9A-F]{4}$/i.test(vol)) {
+    // Prefer /storage/UUID; Alpine may also expose /mnt/media_rw/UUID
+    return '/storage/' + vol + tail;
+  }
   return null;
 }
 

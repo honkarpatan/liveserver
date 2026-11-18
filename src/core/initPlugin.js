@@ -9,7 +9,6 @@ import { getServerStatus } from '../server/status.js';
 import { registerLiveReloadOnSave, unregisterLiveReloadOnSave } from '../server/liveReload.js';
 import { closeBrowserConfirm } from '../ui/browserConfirm.js';
 import { destroyStatusPill } from '../ui/statusPill.js';
-import { closeChromiumInstallerModal } from '../ui/chromiumInstaller.js';
 
 
 const FILE_EVENTS = ['switch-file', 'rename-file', 'file-loaded', 'new-file'];
@@ -105,7 +104,6 @@ export function destroyPlugin() {
   try {
     import('../browser/nativeWebview.js').then((m) => m.destroyAcodeWebview?.());
   } catch (_) {}
- closeChromiumInstallerModal();
 }
 
 export function getBaseUrl() {

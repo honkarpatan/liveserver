@@ -5,6 +5,8 @@ export const defaultSettings = {
   port: 8080,
   bindAddress: '127.0.0.1', // or 0.0.0.0
   rootFolder: '',
+  rootFolderUri: '',
+  lastMirrorRoot: '',
   liveReload: true,
   openBrowserOnStart: true,
   directoryListing: true,
@@ -13,9 +15,11 @@ export const defaultSettings = {
   // Browser
   browserDisplayMode: 'inPage', // inPage | editorTab
   browserSearchEngine: 'google', // google | duckduckgo | bing | brave
-  externalSiteMode: 'proxy', // proxy | chromium | acodeWebview | inApp | systemBrowser
+  externalSiteMode: 'proxy', // proxy | acodeWebview | inApp | systemBrowser
   browserHomeUrl: '', // empty = Green Fox Homepage
   showSideButton: true,
+  sideButtonRunningLabel: '{HOST}:{PORT}',
+  sideButtonOfflineLabel: 'Go Live',
   browserOpacity: 1, // 0.1 - 1.0
   browserOverlay: false,
   overlayAutoSave: true,
@@ -35,7 +39,6 @@ export const defaultSettings = {
 
   // Deps
   dependenciesInstalled: false,
-  chromiumInstalled: false,
   acodelsPath: '',
 
   // UI

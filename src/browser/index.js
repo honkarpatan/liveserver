@@ -22,6 +22,7 @@ import {
   initBridge,
   disposeBridge,
   setZoomActive,
+  addSourceTab,
   renderTabStrip,
   getActiveTab,
   getTabs,
@@ -264,7 +265,9 @@ function wireChrome(wrap) {
 
     const ntpInput = document.createElement('input');
     ntpInput.type = 'text';
-    ntpInput.placeholder = 'Search or enter web address';
+    ntpInput.placeholder = 'Search or type a URL';
+    ntpInput.setAttribute('enterkeyhint', 'enter');
+    ntpInput.setAttribute('inputmode', 'text');
     ntpInput.setAttribute('spellcheck', 'false');
     ntpInput.setAttribute('autocapitalize', 'off');
     ntpInput.setAttribute('autocomplete', 'off');
@@ -294,7 +297,70 @@ function wireChrome(wrap) {
     const tiles = document.createElement('div');
     tiles.className = 'ls-ntp-tiles';
 
-    const mkTile = (name, url, letter, faviconUrl) => {
+    const editShortcutAt = async (index) => {
+      const list = bookmarks();
+      if (index < 0 || index >= list.length) return;
+      const prompt = acode.require('prompt');
+      const select = acode.require('select');
+      const cur = list[index];
+      const act = await select(
+        'Shortcut',
+        [
+          ['edit', 'Edit name / URL'],
+          ['delete', 'Remove shortcut'],
+        ],
+        { hideOnSelect: true }
+      );
+      if (!act) return;
+      if (act === 'delete') {
+        list.splice(index, 1);
+        updateSetting('browserBookmarks', list);
+        renderNtp();
+        return;
+      }
+      const rawUrl = await prompt('Bookmark URL', cur.url || 'https://', 'text');
+      if (!rawUrl) return;
+      const cleanUrl = normalizeUrl(rawUrl);
+      const name =
+        (await prompt('Shortcut name', cur.title || cleanUrl.replace(/^https?:\/\//, ''), 'text')) ||
+        cleanUrl;
+      list[index] = { url: cleanUrl, title: name };
+      updateSetting('browserBookmarks', list);
+      renderNtp();
+    };
+
+    const bindLongPress = (el, fn) => {
+      let timer = null;
+      let moved = false;
+      const clear = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+      };
+      el.addEventListener('touchstart', (e) => {
+        moved = false;
+        clear();
+        timer = setTimeout(() => {
+          timer = null;
+          fn(e);
+        }, 480);
+      }, { passive: true });
+      el.addEventListener('touchmove', () => {
+        moved = true;
+        clear();
+      }, { passive: true });
+      el.addEventListener('touchend', clear);
+      el.addEventListener('touchcancel', clear);
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        fn(e);
+      });
+      el.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' && e.button === 2) return;
+        if (e.pointerType === 'mouse') return;
+      });
+    };
+
+    const mkTile = (name, url, letter, faviconUrl, opts = {}) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'ls-ntp-tile';
@@ -312,17 +378,29 @@ function wireChrome(wrap) {
         dot.textContent = letter;
       }
       b.querySelector('.ls-ntp-name').textContent = name;
-      b.addEventListener('click', async () => {
+      let suppressClick = false;
+      b.addEventListener('click', async (e) => {
+        if (suppressClick) {
+          suppressClick = false;
+          e.preventDefault();
+          return;
+        }
         const u = typeof url === 'function' ? await url() : url;
         if (!u) return toast('Server not running', 2000);
         openTargetUrl(u);
       });
+      if (typeof opts.onLongPress === 'function') {
+        bindLongPress(b, (e) => {
+          suppressClick = true;
+          opts.onLongPress(e);
+        });
+      }
       return b;
     };
 
     tiles.appendChild(mkTile('Server root', serverRootUrl, 'S', null));
 
-    bookmarks().forEach((m) => {
+    bookmarks().forEach((m, idx) => {
       let fav = null;
       try {
         const hostName = new URL(m.url).hostname;
@@ -331,7 +409,11 @@ function wireChrome(wrap) {
         }
       } catch (_) {}
       const ch = (m.title || m.url || '?').replace(/^https?:\/\//, '')[0]?.toUpperCase() || 'B';
-      tiles.appendChild(mkTile(m.title || m.url, m.url, ch, fav));
+      tiles.appendChild(
+        mkTile(m.title || m.url, m.url, ch, fav, {
+          onLongPress: () => editShortcutAt(idx),
+        })
+      );
     });
 
     const addTile = document.createElement('button');
@@ -543,14 +625,51 @@ function wireChrome(wrap) {
     toggleDeviceMode: () => deviceMode.toggle(),
     viewSource: async () => {
       const t = getActiveTab();
-      if (!t || !/^https?:/i.test(t.url)) return toast('No page source here', 1800);
+      if (!t || t.url === 'about:blank' || String(t.url).startsWith('view-source:')) {
+        return toast('No page source here', 1800);
+      }
+      toast('Loading source…', 1200);
+      let raw = '';
       try {
-        const fetchUrl = t.iframe?.src && t.iframe.src !== 'about:blank' ? t.iframe.src : t.url;
-        const txt = await (await fetch(fetchUrl)).text();
-        const blobUrl = URL.createObjectURL(new Blob([txt], { type: 'text/plain;charset=utf-8' }));
-        addTab(device, blobUrl, 'view-source:' + t.url.replace(/^https?:\/\//, ''));
+        const doc = t.iframe?.contentDocument;
+        if (doc?.documentElement) raw = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+      } catch (_) {}
+      if (!raw) {
+        try {
+          const fetchUrl =
+            t.iframe?.src && t.iframe.src !== 'about:blank' ? t.iframe.src : t.url;
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 15000);
+          const res = await fetch(fetchUrl, { signal: ctrl.signal, credentials: 'omit' });
+          clearTimeout(timer);
+          raw = await res.text();
+        } catch (e) {
+          toast('Could not load source: ' + (e?.message || e), 2800);
+          return;
+        }
+      }
+      if (!raw) {
+        toast('Empty source', 1800);
+        return;
+      }
+      const esc = String(raw)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      const title = 'view-source:' + String(t.url).replace(/^https?:\/\//i, '');
+      const srcdoc =
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<title>' +
+        title.replace(/[<>]/g, '') +
+        '</title><style>html,body{margin:0;background:#1e1e1e;color:#d4d4d4}' +
+        'pre{margin:12px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;' +
+        'white-space:pre-wrap;word-break:break-word}</style></head><body><pre>' +
+        esc +
+        '</pre></body></html>';
+      try {
+        addSourceTab(device, title, srcdoc);
       } catch (e) {
-        toast('Could not load source: ' + (e?.message || e), 2500);
+        toast('Could not open source tab: ' + (e?.message || e), 2500);
       }
     },
     openExternal: () => {
@@ -624,7 +743,7 @@ function createChrome() {
         <button type="button" class="ls-ib ls-home" title="Home">${icon(I.home, 18)}</button>
         <div class="ls-omni">
           <button type="button" class="ls-site" title="Site information">${icon(I.info, 16)}</button>
-          <input class="ls-browser-url" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Search or type a URL" />
+          <input class="ls-browser-url" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" enterkeyhint="enter" inputmode="text" placeholder="Search or type a URL" />
           <button type="button" class="ls-ib ls-star" title="Bookmark this tab">${icon(I.star, 16)}</button>
         </div>
         <button type="button" class="ls-ib ls-op-btn" title="Opacity">${icon(I.drop, 18)}</button>

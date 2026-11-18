@@ -1,6 +1,6 @@
 {
   "id": "acode.plugin.sugerserver",
-  "name": "Live Server",
+  "name": "Html Server - Devtool",
   "main": "main.js",
   "version": "2.0.0",
   "readme": "readme.md",
@@ -21,7 +21,7 @@
     "browser",
     "preview"
   ],
-  "price": 25,
+  "price": 55,
   "repository": "",
   "author": {
     "name": "Dev.Sourav",

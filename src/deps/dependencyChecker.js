@@ -1,6 +1,5 @@
 /**
- * Node / npm / acodels node_modules + optional Chromium browser engine check & install.
- * Chromium appears in the dependencies list as optional & unselected by default.
+ * Node / npm / acodels node_modules — required deps only.
  */
 import { getSettings, updateSetting } from '../core/settings.js';
 import {
@@ -18,7 +17,6 @@ import {
   resetInstallCancel,
   closeDepsPicker,
 } from './depsPicker.js';
-import { showChromiumInstallerPopup } from '../ui/chromiumInstaller.js';
 
 const toast = acode.require('toast');
 const confirm = acode.require('confirm');
@@ -36,23 +34,9 @@ export const DEP_CATALOG = [
     label: 'acodels modules',
     desc: 'Backend node_modules (express, ws, chokidar)',
     required: true,
-  },
-  {
-    id: 'chromium',
-    label: 'chromium (optional)',
-    desc: 'Headless browser for heavy JS websites (~180MB)',
-    required: false,
-    optional: true,
-  },
+  }
 ];
 
-export async function isChromiumInstalled() {
-  try {
-    if (await commandExists('chromium')) return true;
-    if (await commandExists('chromium-browser')) return true;
-  } catch (_) {}
-  return false;
-}
 
 export async function resolveAcodelsPath() {
   const s = getSettings();
@@ -117,22 +101,16 @@ export async function scanAllDeps(baseUrl) {
   const npmOk = await commandExists('npm');
   const acodelsPath = await resolveAcodelsPath(baseUrl);
   const modsOk = nodeOk ? await acodelsModulesPresent(acodelsPath) : false;
-  const chromiumOk = await isChromiumInstalled();
-
-  updateSetting('chromiumInstalled', chromiumOk);
-
   return [
     { ...DEP_CATALOG[0], present: nodeOk },
     { ...DEP_CATALOG[1], present: npmOk },
     { ...DEP_CATALOG[2], present: modsOk, path: acodelsPath },
-    { ...DEP_CATALOG[3], present: chromiumOk },
   ];
 }
 
 export async function verifyDependencies(baseUrl) {
   const all = await scanAllDeps(baseUrl);
-  // Only required items block server start; chromium is optional
-  const missing = all.filter((d) => d.required !== false && !d.present).map((d) => d.id);
+  const missing = all.filter((d) => !d.present).map((d) => d.id);
   return { ok: missing.length === 0, missing, all };
 }
 
@@ -142,9 +120,8 @@ function toPickerItems(all) {
     label: d.label,
     desc: d.desc + (d.path ? ` — ${d.path}` : ''),
     present: d.present,
-    optional: d.optional === true,
-    // Chromium is unselected by default even when not installed
-    checked: d.optional ? false : !d.present,
+    optional: false,
+    checked: !d.present,
   }));
 }
 
@@ -259,7 +236,7 @@ export async function showDepsPickerFlow(opts = {}) {
     checking: false,
     subtitle:
       miss === 0
-        ? 'All required tools present (Chromium is optional)'
+        ? 'All required tools present'
         : `${miss} required missing — tick what to install`,
     items: toPickerItems(all),
   });
@@ -274,12 +251,6 @@ export async function showDepsPickerFlow(opts = {}) {
   }
 
   if (result.action === 'install' && result.selected?.length) {
-    const onlyChromium = result.selected.length === 1 && result.selected[0] === 'chromium';
-    if (onlyChromium) {
-      closeDepsPicker(true);
-      return showChromiumInstallerPopup({ startImmediately: true });
-    }
-
     installInFlight = true;
     resetInstallCancel();
 
@@ -338,17 +309,7 @@ export async function showDepsPickerFlow(opts = {}) {
           logAppend: String(out2 || '').slice(-3000) + '\n',
         });
       }
-
-      if (result.selected.includes('chromium')) {
-        closeDepsPicker(true);
-        installInFlight = false;
-        await showChromiumInstallerPopup({ startImmediately: true });
-        const after = await verifyDependencies(baseUrl);
-        updateSetting('dependenciesInstalled', after.ok);
-        return after.ok;
-      }
-
-      const after = await verifyDependencies(baseUrl);
+const after = await verifyDependencies(baseUrl);
       updateDepsPicker({
         progressMode: true,
         percent: 100,

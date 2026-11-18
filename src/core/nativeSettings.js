@@ -18,7 +18,6 @@ export const ACTIONS = [
   ['root', 'Select root folder'],
   ['status', 'Show server status'],
   ['deps', 'Check dependencies'],
-  ['chromium', 'Install Chromium (for heavy sites)'],
   ['reinstall', 'Reinstall dependencies'],
 ];
 
@@ -110,7 +109,6 @@ export const SCHEMA = [
     info: 'Proxy auto-switches to Chromium if slow, or select Chromium directly',
     select: [
       ['proxy', 'Local Node.js Reverse Proxy (Default)'],
-      ['chromium', 'Headless Chromium (Always)'],
       ['acodeWebview', 'Acode Native WebView (Fullscreen)'],
       ['inApp', 'Direct iframe (without proxy)'],
       ['systemBrowser', 'Chrome / External system browser'],
@@ -157,6 +155,26 @@ export const SCHEMA = [
     category: 'Browser',
     text: 'Show side button',
     checkbox: true,
+  },
+  {
+    key: 'sideButtonRunningLabel',
+    category: 'Browser',
+    text: 'Side button running label',
+    value: '{HOST}:{PORT}',
+    valueText: (v) => String(v || '{HOST}:{PORT}'),
+    prompt: 'Running label ({HOST} {PORT} tokens)',
+    promptType: 'text',
+    info: 'Shown when server is live. Tokens: {HOST} {PORT}.',
+  },
+  {
+    key: 'sideButtonOfflineLabel',
+    category: 'Browser',
+    text: 'Side button offline label',
+    value: 'Go Live',
+    valueText: (v) => String(v || 'Go Live'),
+    prompt: 'Offline label',
+    promptType: 'text',
+    info: 'Shown when server is stopped.',
   },
   {
     key: '__browserAction',
@@ -292,10 +310,7 @@ async function runAction(id) {
       const m = await import('../deps/dependencyChecker.js');
       return m.checkDependenciesAction();
     }
-    if (id === 'chromium') {
-      const m = await import('../ui/chromiumInstaller.js');
-      return m.showChromiumInstallerPopup({ startImmediately: false });
-    }
+    if (false && id === 'chromium') { /* removed */ }
     if (id === 'reinstall') {
       const m = await import('../deps/dependencyChecker.js');
       return m.reinstallDependenciesAction();
@@ -350,18 +365,14 @@ export async function handleSettingChange(key, value) {
 
   updateSetting(key, v);
 
-  if (key === 'externalSiteMode' && v === 'chromium') {
+  if (false && key === 'externalSiteMode' && v === 'chromium') { /* removed */ }
+
+  if (key === 'sideButtonRunningLabel' || key === 'sideButtonOfflineLabel') {
     try {
-      const { isChromiumInstalled } = await import('../deps/dependencyChecker.js');
-      const installed = await isChromiumInstalled();
-      updateSetting('chromiumInstalled', installed);
-      if (!installed) {
-        const { showChromiumInstallerPopup } = await import('../ui/chromiumInstaller.js');
-        showChromiumInstallerPopup({ startImmediately: false });
-      }
+      const m = await import('../ui/sideButton.js');
+      m.setLiveDot?.(null); // refresh from status
     } catch (_) {}
   }
-
   if (key === 'showSideButton') {
     try {
       const m = await import('../ui/sideButton.js');

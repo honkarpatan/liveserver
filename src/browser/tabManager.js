@@ -7,9 +7,8 @@ import { loadDevtoolCode } from './devtool.js';
 import { getSettings } from '../core/settings.js';
 import { ensureProxyServer } from '../server/process.js';
 import { getServerStatus } from '../server/status.js';
-import { isChromiumInstalled } from '../deps/dependencyChecker.js';
-import { showChromiumInstallerPopup, isChromiumInstallerOpen } from '../ui/chromiumInstaller.js';
 import { showStatusPill } from '../ui/statusPill.js';
+import { ZoomHandler } from './zoomHandler.js';
 
 const toast = acode.require('toast');
 
@@ -21,7 +20,6 @@ let nextId = 1;
 let listeners = [];
 let visited = [];
 let slowLoadTimer = null;
-let chromiumPromptDismissed = false;
 
 export function getTabs() {
   return tabs.slice();
@@ -122,17 +120,11 @@ async function resolveFrameSrc(displayUrl, opts = {}) {
   }
 
 const extMode = getSettings().externalSiteMode || 'proxy';
-if (extMode === 'proxy' || extMode === 'chromium') {
+if (extMode === 'proxy') {
   const st = getServerStatus();
   const port = st.running && st.port ? st.port : await ensureProxyServer();
   if (port) {
-    const useChromium = extMode === 'chromium' || !!opts.useChromium;
-    const engineParam = useChromium ? '&engine=chromium' : '';
-    const frame = `http://127.0.0.1:${port}/__proxy?url=${encodeURIComponent(displayUrl)}${engineParam}`;
-    try {
-      console.log('[LiveServer] external frame', { mode: extMode, chromium: useChromium, url: displayUrl, frame: frame.slice(0, 160) });
-    } catch (_) {}
-    return frame;
+    return `http://127.0.0.1:${port}/__proxy?url=${encodeURIComponent(displayUrl)}`;
   }
 }
   
@@ -146,36 +138,11 @@ function clearSlowLoadTimer() {
   }
 }
 
-function armSlowLoadWatcher(tab, displayUrl, useChromium) {
+function armSlowLoadWatcher(tab, displayUrl, _useChromium) {
+  // Chromium path removed — proxy-only. Keep hook for API compatibility.
   clearSlowLoadTimer();
-  if (!tab || !displayUrl || displayUrl === 'about:blank' || isLocalUrl(displayUrl)) return;
-
-  slowLoadTimer = setTimeout(async () => {
-    if (!tab.loading || tab.id !== activeTabId) return;
-
-    const installed = getSettings().chromiumInstalled === true || (await isChromiumInstalled());
-
-    if (installed) {
-      if (!useChromium) {
-        showStatusPill('Switching slow page to Chromium renderer...', { spin: true, autoHideMs: 3500 });
-        loadUrlIntoTab(tab, displayUrl, { pushHistory: false, useChromium: true });
-      }
-      return;
-    }
-
-    if (chromiumPromptDismissed || isChromiumInstallerOpen()) return;
-
-    showChromiumInstallerPopup({
-      url: displayUrl,
-      onInstalled: () => {
-        loadUrlIntoTab(tab, displayUrl, { pushHistory: false, useChromium: true });
-      },
-      onDismiss: () => {
-        chromiumPromptDismissed = true;
-      },
-    });
-  }, SLOW_LOAD_TIMEOUT_MS);
 }
+
 
 export function sendToTab(tab, cmd, extra) {
   try {
@@ -197,14 +164,23 @@ function directWin(tab) {
 }
 
 export function applyZoom(tab) {
+  if (!tab) return;
+  const pct = tab.zoom || 100;
+  const factor = pct / 100;
+  // Always zoom the iframe element (works for cross-origin pages)
+  try {
+    if (tab.iframe) {
+      tab.iframe.style.zoom = String(factor);
+      tab.iframe.style.transformOrigin = '0 0';
+    }
+  } catch (_) {}
   const w = directWin(tab);
   if (w) {
     try {
-      w.document.documentElement.style.zoom = String((tab.zoom || 100) / 100);
-      return;
+      w.document.documentElement.style.zoom = String(factor);
     } catch (_) {}
   }
-  sendToTab(tab, 'zoom', { pct: tab.zoom || 100 });
+  sendToTab(tab, 'zoom', { pct });
 }
 
 function findTab(source) {
@@ -288,7 +264,7 @@ async function loadUrlIntoTab(tab, rawUrl, opts = {}) {
   clearSlowLoadTimer();
 
   const extMode = getSettings().externalSiteMode || 'proxy';
-tab.useChromium = extMode === 'chromium' || !!opts.useChromium;
+tab.useChromium = false;
 
   
   const displayUrl = normalizeUrl(rawUrl);
@@ -298,7 +274,7 @@ tab.useChromium = extMode === 'chromium' || !!opts.useChromium;
 
   tab.url = displayUrl;
   tab.devtools = false;
-  tab.useChromium = !!opts.useChromium;
+  tab.useChromium = !!false;
 
   if (displayUrl === 'about:blank') {
     tab.loading = false;
@@ -347,6 +323,12 @@ export function addTab(container, url, title) {
   };
 
   container.appendChild(iframe);
+  try {
+    tab.zoomHandler?.destroy?.();
+    tab.zoomHandler = new ZoomHandler(iframe);
+  } catch (e) {
+    console.warn('[LiveServer] ZoomHandler', e);
+  }
   tabs.push(tab);
   tabs.forEach((t) => {
     if (t.iframe) t.iframe.style.display = t.id === id ? 'block' : 'none';
@@ -452,7 +434,7 @@ export function closeAllTabs() {
 export function navigateActive(url, opts = {}) {
   const t = getActiveTab();
   if (!t?.iframe) return;
-  loadUrlIntoTab(t, url, { pushHistory: true, useChromium: !!opts.useChromium });
+  loadUrlIntoTab(t, url, { pushHistory: true, useChromium: !!false });
 }
 
 export function reloadActive() {
@@ -597,4 +579,24 @@ export function renderTabStrip(tabsEl) {
     el.addEventListener('click', () => activateTab(t.id));
     tabsEl.appendChild(el);
   });
+}
+
+/** Open a static HTML srcdoc tab (e.g. view-source) without network load hang */
+export function addSourceTab(container, title, htmlSrcdoc) {
+  const tab = addTab(container, 'about:blank', title || 'view-source');
+  tab.pinTitle = true;
+  tab.loading = false;
+  tab.url = title || 'view-source';
+  try {
+    tab.iframe.removeAttribute('sandbox');
+  } catch (_) {}
+  try {
+    tab.iframe.srcdoc = htmlSrcdoc;
+  } catch (e) {
+    const blob = new Blob([htmlSrcdoc], { type: 'text/html;charset=utf-8' });
+    tab.iframe.src = URL.createObjectURL(blob);
+  }
+  tab.loading = false;
+  emit();
+  return tab;
 }

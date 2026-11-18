@@ -7,6 +7,7 @@ import { silentExec, wrapSh, getExecutor } from '../utils/alpineExec.js';
 import { resolveAcodelsPath, ensureLiveServerDeps } from '../deps/dependencyChecker.js';
 import { ensureFullAcodelsIndex } from './ensureAcodelsIndex.js';
 import { getEffectiveRoot } from './rootFolder.js';
+import { mirrorIfNeeded, stopMirrorWatch, getMirrorState } from './projectMirror.js';
 import { getConfiguredPort, buildServerUrl } from './port.js';
 import { getServerStatus, setServerStatus, refreshStatusFromBackend } from './status.js';
 import { getActiveFile, uriToFsPath } from '../utils/paths.js';
@@ -90,30 +91,105 @@ function mapRootFast(root) {
   return r;
 }
 
+
+async function resolveServeRoot(root, fileName) {
+  let aroot = await resolveAlpineRoot(root);
+  if (aroot) return { aroot, mirrored: false };
+
+  // Alpine cannot see this path (common on external SD / SAF) → mirror to internal
+  console.warn('[LiveServer] alpine root missing, trying project mirror for', root);
+  try {
+    const { getSettings } = await import('../core/settings.js');
+    const entry = fileName || 'index.html';
+    const mirrored = await mirrorIfNeeded(
+      root,
+      entry,
+      getSettings().rootFolderUri || ''
+    );
+    if (mirrored) return { aroot: mirrored, mirrored: true };
+  } catch (e) {
+    console.warn('[LiveServer] mirror failed', e);
+    throw e;
+  }
+  return { aroot: null, mirrored: false };
+}
+
 async function resolveAlpineRoot(root) {
   const r = String(root || '').replace(/\/+$/, '') || '/';
-  const cands = [r];
+  const cands = [];
+  const push = (x) => {
+    if (x && !cands.includes(x)) cands.push(x);
+  };
+  push(r);
+
+  // Internal shared storage aliases
   let m = r.match(/^\/storage\/emulated\/0(\/.*)?$/);
-  if (m) cands.push('/sdcard' + (m[1] || ''));
+  if (m) push('/sdcard' + (m[1] || ''));
   m = r.match(/^\/sdcard(\/.*)?$/);
-  if (m) cands.push('/storage/emulated/0' + (m[1] || ''));
-  if (!/^\/(sdcard|storage)(\/|$)/.test(r)) return r;
+  if (m) {
+    push('/storage/emulated/0' + (m[1] || ''));
+    push('/storage/self/primary' + (m[1] || ''));
+  }
+  m = r.match(/^\/storage\/self\/primary(\/.*)?$/);
+  if (m) {
+    push('/sdcard' + (m[1] || ''));
+    push('/storage/emulated/0' + (m[1] || ''));
+  }
+
+  // External SD (UUID volume) — try common Alpine/Android mounts
+  const uuidM = r.match(/^\/storage\/([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})(\/.*)?$/);
+  if (uuidM) {
+    const id = uuidM[1];
+    const tail = uuidM[2] || '';
+    push('/storage/' + id + tail);
+    push('/mnt/media_rw/' + id + tail);
+    push('/mnt/runtime/default/' + id + tail);
+    push('/storage/' + id.toUpperCase() + tail);
+    push('/storage/' + id.toLowerCase() + tail);
+  }
+
+  // Relative tail under any mounted volume (last-resort scan)
+  const tailOnly = (() => {
+    const mm = r.match(/\/(?:storage|sdcard|emulated|media_rw)\/[^/]+(\/.+)$/i);
+    return mm ? mm[1] : '';
+  })();
+
+  if (!/^\/(sdcard|storage|mnt)(\/|$)/.test(r) && !r.startsWith('/data/')) {
+    // non-storage path (e.g. termux home) — return as-is after quick exists probe below
+  }
 
   const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+  const script =
+    'for d in ' +
+    cands.map(q).join(' ') +
+    '; do [ -d "$d" ] && { echo "OK:$d"; exit 0; }; done; ' +
+    (tailOnly
+      ? 'for base in /storage/* /mnt/media_rw/* /sdcard; do ' +
+        '[ -d "$base' +
+        tailOnly.replace(/'/g, "'\\''") +
+        '" ] && { echo "OK:$base' +
+        tailOnly.replace(/'/g, "'\\''") +
+        '"; exit 0; }; done; '
+      : '') +
+    'echo NONE';
+
   let out = '';
   try {
-    out = await silentExec(
-      'for d in ' + cands.map(q).join(' ') + '; do [ -d "$d" ] && { echo "OK:$d"; exit 0; }; done; echo NONE',
-      { timeoutMs: 10000 }
-    );
+    out = await silentExec(script, { timeoutMs: 12000 });
   } catch (e) {
     console.warn('[LiveServer] root probe failed, using path as is', e);
-    return r;
+    return mapRootFast(r);
   }
   const hit = String(out || '').match(/OK:(.+)/);
-  if (hit) return hit[1].trim();
-  if (/NONE/.test(String(out || ''))) return null;
-  return r;
+  if (hit) {
+    console.log('[LiveServer] alpine root', hit[1].trim());
+    return hit[1].trim();
+  }
+  if (/NONE/.test(String(out || ''))) {
+    console.warn('[LiveServer] alpine root not found for', r, 'cands=', cands);
+    return null;
+  }
+  return mapRootFast(r);
 }
 
 function parseCustomHeaders(text) {
@@ -394,7 +470,16 @@ export async function startServer(opts = {}) {
       return false;
     }
 
-    const aroot = mapRootFast(effectiveRoot);
+    let aroot;
+    let mirrored = false;
+    try {
+      const resolved = await resolveServeRoot(effectiveRoot, fileName);
+      aroot = resolved.aroot || mapRootFast(effectiveRoot);
+      mirrored = resolved.mirrored;
+    } catch (e) {
+      toast('Cannot serve folder: ' + (e?.message || e), 4000);
+      return null;
+    }
     const fileName = opts.fileName || relativeFileUnderRoot(effectiveRoot);
     const needsSetup = !st.running || st.port !== port || st.root !== aroot || st.fileName !== fileName;
 
@@ -451,10 +536,20 @@ export async function startServer(opts = {}) {
   }
 
   const fileName = opts.fileName || relativeFileUnderRoot(root);
-  const aroot = await resolveAlpineRoot(root);
+  let aroot;
+  let mirrored = false;
+  try {
+    const resolved = await resolveServeRoot(root, fileName);
+    aroot = resolved.aroot;
+    mirrored = resolved.mirrored;
+  } catch (e) {
+    setServerStatus({ running: false, lastError: String(e?.message || e) });
+    toast('Cannot serve folder: ' + (e?.message || e), 4500);
+    return null;
+  }
   if (!aroot) {
     setServerStatus({ running: false, lastError: 'root not reachable' });
-    toast('Folder not reachable from Alpine: ' + root + ' (allow Acode storage permission)', 4500);
+    toast('Folder not reachable — mirror also failed. Use internal /sdcard or grant storage access.', 4500);
     return false;
   }
 
@@ -551,6 +646,7 @@ export async function startServer(opts = {}) {
 }
 
 export async function stopServer() {
+  try { stopMirrorWatch(); } catch (_) {}
   clearInactivityTimer();
   const st = getServerStatus();
   const port = st.port || getConfiguredPort();

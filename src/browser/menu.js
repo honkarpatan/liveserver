@@ -140,6 +140,10 @@ export function openBrowserMenu(api, where) {
         { label: 'Device mode (responsive)', checked: !!api.isDeviceMode?.(), onClick: () => api.toggleDeviceMode?.() },
         { label: 'View page source', onClick: () => api.viewSource?.() },
         { separator: true },
+        { label: 'Zoom in', onClick: () => api.zoom?.(10) },
+        { label: 'Zoom out', onClick: () => api.zoom?.(-10) },
+        { label: 'Reset zoom', onClick: () => api.zoom?.(0, true) },
+        { separator: true },
         {
           label: 'Open server root',
           onClick: async () => {
