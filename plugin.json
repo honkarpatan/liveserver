@@ -1,6 +1,6 @@
 {
   "id": "acode.plugin.sugerserver",
-  "name": "Html Server - Devtool",
+  "name": "Html Server Pro - Devtool",
   "main": "main.js",
   "version": "2.0.0",
   "readme": "readme.md",
@@ -11,17 +11,17 @@
     "icon.png",
     "readme.md"
   ],
-  "minVersionCode": 290,
-  "license": "",
+  "minVersionCode": 1011,
+  "license": "Proprietary",
   "changelogs": "changelogs.md",
   "keywords": [
-    "Live Server",
+    "Live Server Pro",
     "HTML",
     "HTTP",
     "browser",
     "preview"
   ],
-  "price": 55,
+  "price": 70,
   "repository": "",
   "author": {
     "name": "Dev.Sourav",

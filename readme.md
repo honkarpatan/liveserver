@@ -1,39 +1,53 @@
-<div style="display:flex;align-items:center;background: linear-gradient(to right, #5b7c99, #6b7280);padding:10px;height:40px;margin:0;font-size:10px;">
-  <svg width="40" height="40" viewBox="0 0 24 24" style="margin-right:10px;flex-shrink:0;" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="12" cy="12" r="10" fill="#e8f0fe"/>
-    <path d="M8 12h8M12 8v8" stroke="#1a73e8" stroke-width="1.8" stroke-linecap="round"/>
-    <path d="M6 16.5c1.5 1.2 3.5 2 6 2s4.5-.8 6-2" stroke="#34a853" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  </svg>
-  <h1 style="margin:0;">
-    <span style="background: linear-gradient(135deg, #0f172a, #1e293b); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: bold;">Live Server</span>
-    <sup style="font-size:0.6rem;font-weight:300;color:#111;padding:0 0 0 5px;">for Acode</sup>
+<div style="display:flex;align-items:center;background: linear-gradient(to right, #022634, #01261f);padding:10px;height:40px;margin:0;font-size:10px;">
+<img alt="" src="https://i.postimg.cc/5tsg9097/green-fox-html-server.png" style="width:40px;">
+  <h1 style="margin: 10px 0px 0px 10px;">
+    <span style="background: linear-gradient(135deg, #fff, #fff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: bold;">Html Server</span>
+    <sup style="font-size:0.6rem;font-weight:300;color:#fff;padding:0 0 0 5px;">PRO</sup>
   </h1>
   <div style="margin-left:auto;display:flex;flex-direction:column;gap:5px;">
-    <small style="font-size:0.6em;color:#0f4128;">v2</small>
-    <small style="font-size:0.6em;color:#403710;">Stable</small>
+    <small style="font-size:0.6em;color:#fff;">v2</small>
+    <small style="font-size:0.6em;color:#fff;">Stable</small>
   </div>
 </div>
 
-Local HTTP preview with **live reload**, in-app browser, and silent dependency install — for Acode on Android.
+Local HTTP preview with **live reload**, in-app browser with auto setup — for Acode.
 
 ---
 
 <div style="border-left: 4px solid #f59e0b; background: rgba(245,158,11,0.10); padding: 10px 15px; border-radius: 3px; margin: 12px 0;">
 <b>Note</b><br>
-Starting from <b>external SD card</b> may fail if Alpine cannot see that mount — prefer internal storage (<code>/sdcard</code>) or set a reachable root folder. Permission and path mapping matter.
+  Working on Any path but Prefer Acode <b>Terminal Public</b> OR <b>Acode Storage</b> , SDcard or Other Storage may fail on Some Device !
 </div>
 
 ---
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Live_reload-1a73e8?style=for-the-badge">
-  <img src="https://img.shields.io/badge/In--app_browser-34a853?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Side_button-f59e0b?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Deps_popup-9333ea?style=for-the-badge">
-  <img src="https://img.shields.io/badge/Category_settings-0ea5e9?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Live_Server-1a73e8?style=for-the-badge">
   <img src="https://img.shields.io/badge/Node_backend-64748b?style=for-the-badge">
+  <img src="https://img.shields.io/badge/In--app_browser-34a853?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Developer_Tool-f59e0b?style=for-the-badge">
 </p>
 
+---
+
+## Preview 
+
+ <div style="display:flex;text-align: center;overflow-x:scroll;">
+  <img src="https://i.postimg.cc/wvBNwQpy/Green-Fox-Html-Server-Page.png" alt="Green-fox-live-server-startpage" style="width: 400px;">
+  <img src="https://i.postimg.cc/rpKGcRgY/green-fox-server-homepage.jpg" alt="Green-fox-live-server-startpage" style="width: 400px;">
+</div>
+
+
+---
+
+## ▶️ Watch Plugin Video | Смотреть видео | 观看视频  | Ver video  | مشاهدة الفيديو 
+
+ <details>
+  <summary style="font-weight:bold; cursor:pointer;"><a href="https://youtube.com/shorts/rqFa4eN-PWk?si=FRpmas88el8DVJ2J">Click to Watch Video [latest 2.0.0v]</a></summary>
+  <iframe width="100%" height="250px" src="https://www.youtube.com/embed/rqFa4eN-PWk?si=FRpmas88el8DVJ2J" frameborder="0" allowfullscreen></iframe>
+  <br>
+</details>
+  
 ---
 
 ## Features
@@ -46,7 +60,7 @@ Vendored Node backend (<code>acodels</code>). WebSocket reload on save. Port and
 <div style="border-left: 4px solid #34a853; background: rgba(52,168,83,0.08); padding: 10px 15px; border-radius: 3px; margin: 10px 0;">
 <b>In-app browser</b><br>
 Multi-tab chrome, address bar, home / NTP search, device mode, fullscreen, bookmarks, menu.<br>
-Display: <b>in page</b> (default) or <b>editor tab</b>. Theme follows Acode (border radius ≤ 3px).
+Display: <b>in page</b> (default) or <b>editor tab</b>.
 </div>
 
 <div style="border-left: 4px solid #f59e0b; background: rgba(245,158,11,0.08); padding: 10px 15px; border-radius: 3px; margin: 10px 0;">
@@ -55,21 +69,15 @@ Quick tools: start / stop / restart, port, root folder, browser, dependencies, s
 </div>
 
 <div style="border-left: 4px solid #9333ea; background: rgba(147,51,234,0.08); padding: 10px 15px; border-radius: 3px; margin: 10px 0;">
-<b>Dependencies</b><br>
-Popup for <b>node</b>, <b>npm</b>, and <b>acodels</b> modules. Progress, logs, cancel. Checked once per restart when opening HTML if missing.
-</div>
-
-<div style="border-left: 4px solid #0ea5e9; background: rgba(14,165,233,0.08); padding: 10px 15px; border-radius: 3px; margin: 10px 0;">
-<b>External sites</b><br>
-Optional local reverse proxy for opening remote URLs inside the shell.
+<b>More...</b>
 </div>
 
 ---
 
 ## Requirements
 
-- Acode (min version code as in `plugin.json`)
-- Background shell executor (Termux / Acode Executor)
+- Acode (min version >= 1.13)
+- Acode Built-In Terminal
 - **node** + **npm** (install from the dependencies popup)
 
 ---
@@ -78,8 +86,16 @@ Optional local reverse proxy for opening remote URLs inside the shell.
 
 1. Open an `.html` file  
 2. Install dependencies if prompted  
-3. Side button → **Go Live** / start  
-4. Browser opens (or use **Open browser**)
+3. Side button → **Go Live** -> `start live server`
+
+   <div style="display:flex;align-items:center;gap :10px;">
+   <img src="https://i.postimg.cc/43GtCTz2/Go-live.jpg" style="width:40px;">
+   <img src="https://i.postimg.cc/QMbrmp85/live-server-running.jpg" style="width:55px;">
+  </div>
+    
+5. Browser opens autometically (Next time use **play button** OR **Open browser** from side tools)
+   
+   <img src="https://i.postimg.cc/XN5s0nFS/live-server-play-preview-button.png" style="height:50px;">
 
 **Root folder:** tools / settings / **Select root folder**.  
 Empty root = folder of the active HTML file.
@@ -104,11 +120,11 @@ Side button labels support tokens **`{HOST}`** and **`{PORT}`**.
 
 | Location | Typical Alpine path | Notes |
 |----------|---------------------|--------|
-| Internal | `/sdcard/...` or `/storage/emulated/0/...` | Best supported |
+| Internal | `file:///data/user/0/com.foxdebug.acodefree/files/public/YOUR_PROJECT_FOLDER` | Best supported |
 | External SD | `/storage/XXXX-XXXX/...` | Probed; may fail if mount not visible to Executor |
 | Termux home | `/data/data/com.termux/files/home/...` | Supported when path resolves |
 
-If start fails with “Folder not reachable from Alpine”, pick a root under internal storage or grant storage access, then retry.
+If start fails with “Folder not reachable from Alpine”, pick a root under Acode terminal storage or grant storage access, then retry.
 
 ---
 

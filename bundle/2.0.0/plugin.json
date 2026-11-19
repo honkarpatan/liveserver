@@ -1,0 +1,31 @@
+{
+  "id": "acode.plugin.sugerserver",
+  "name": "Html Server Pro - Devtool",
+  "main": "main.js",
+  "version": "2.0.0",
+  "readme": "readme.md",
+  "icon": "icon.png",
+  "files": [
+    "acodels/",
+    "devtool/",
+    "icon.png",
+    "readme.md"
+  ],
+  "minVersionCode": 1011,
+  "license": "Proprietary",
+  "changelogs": "changelogs.md",
+  "keywords": [
+    "Live Server Pro",
+    "HTML",
+    "HTTP",
+    "browser",
+    "preview"
+  ],
+  "price": 70,
+  "repository": "",
+  "author": {
+    "name": "Dev.Sourav",
+    "email": "devs.sourav@gmail.com",
+    "github": "Sou6900"
+  }
+}
