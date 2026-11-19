@@ -31,7 +31,7 @@ async function checkServerCapabilities(port, timeoutMs = 900) {
     clearTimeout(to);
     if (!res || !res.ok) return { alive: false, proxy: false };
     const data = await res.json().catch(() => ({}));
-    return { alive: true, proxy: data?.proxy === true && (data?.proxyVersion || 0) >= 5 };
+    return { alive: true, proxy: data?.proxy === true && (data?.proxyVersion || 0) >= 6 };
   } catch (_) {
     return { alive: false, proxy: false };
   }
@@ -154,7 +154,7 @@ async function resolveServeRoot(root, fileName, opts = {}) {
     } catch (_) {}
     console.warn('[LiveServer] alpine sees', aroot, 'but not', entry, '-> mirroring through Acode fs');
   } else {
-    console.warn('[LiveServer] alpine cannot see', root, '-> mirroring through Acode fs');
+    console.warn('[LiveServer] alpine cannot see', root, '-> mirroring');
   }
 
   try {
@@ -177,7 +177,7 @@ async function resolveAlpineRoot(root) {
   try {
     const out = await silentExec('[ -d ' + q(r) + ' ] && echo OK || echo NO', { timeoutMs: 8000 });
     if (String(out || '').includes('OK')) {
-      console.log('[LiveServer] alpine root (direct)', r);
+      // console.log('[LiveServer] alpine root (direct)', r);
       return r;
     }
   } catch (e) {
@@ -225,7 +225,7 @@ async function resolveAlpineRoot(root) {
     );
     const hit = String(out || '').match(/OK:(.+)/);
     if (hit) {
-      console.log('[LiveServer] alpine root', hit[1].trim());
+      // console.log('[LiveServer] alpine root', hit[1].trim());
       return hit[1].trim();
     }
   } catch (e) {
@@ -253,7 +253,7 @@ async function locateEntryUnderRoot(root, fileName) {
     'echo MISS; ls -la "$R" 2>&1 | head -15';
   try {
     const out = await silentExec(script, { timeoutMs: 12000 });
-    console.log('[LiveServer] entry locate', String(out || '').slice(0, 240));
+    // console.log('[LiveServer] entry locate', String(out || '').slice(0, 240));
     const m = String(out || '').match(/HIT:([^|]+)\|([^\n]+)/);
     if (m) return { root: m[1].trim(), fileName: m[2].trim() };
   } catch (e) {
@@ -325,7 +325,7 @@ async function patchSetup(port, root, fileName) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    console.log('[LiveServer] setup', root, fileName, res && res.status);
+    // console.log('[LiveServer] setup', root, fileName, res && res.status);
     return !!(res && (res.ok || res.status === 201));
   } catch (e) {
     console.warn('[LiveServer] setup', e);
@@ -676,7 +676,7 @@ export async function startServer(opts = {}) {
     const located = await locateEntryUnderRoot(aroot, fileName);
     if (located) {
       if (located.root !== aroot || located.fileName !== fileName) {
-        console.log('[LiveServer] adjusted root/file', aroot, fileName, '->', located.root, located.fileName);
+        // console.log('[LiveServer] adjusted root/file', aroot, fileName, '->', located.root, located.fileName);
         aroot = located.root;
         fileName = located.fileName;
       }

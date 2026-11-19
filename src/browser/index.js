@@ -44,10 +44,10 @@ import { setFullscreen, exitFullscreen } from './fullscreen.js';
 import { mountInPage } from './pageHost.js';
 import { mountInEditorTab } from './editorTab.js';
 import { openInAcodeWebview } from './nativeWebview.js';
+import { FOX_LOGO_URL } from './logo.js';
 
 const toast = acode.require('toast');
 
-const FOX_LOGO_URL = 'https://i.postimg.cc/WpYPQ47b/green-fox.png';
 const ZOOM_STOPS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
 const WEB_FILE = /\.(html?|css|js|mjs|json|svg|xml|txt|md)$/i;
 const WATCHED_KEYS = ['browserOpacity', 'browserOverlay', 'overlayAutoSave', 'showAddressBar'];
@@ -95,8 +95,8 @@ function openUrlInSystemBrowser(u) {
       window.cordova.InAppBrowser.open(u, '_system');
       return;
     }
-    if (window.cordova?.exec) {
-      window.cordova.exec(null, null, 'System', 'open-in-browser', [u]);
+    if (window.system?.openInBrowser) {
+      window.system.openInBrowser(u);
       return;
     }
     window.open(u, '_blank', 'noopener');
@@ -403,13 +403,7 @@ function wireChrome(wrap) {
     tiles.appendChild(mkTile('Server root', serverRootUrl, 'S', null));
 
     bookmarks().forEach((m, idx) => {
-      let fav = null;
-      try {
-        const hostName = new URL(m.url).hostname;
-        if (hostName && hostName !== '127.0.0.1' && hostName !== 'localhost') {
-          fav = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostName)}&sz=64`;
-        }
-      } catch (_) {}
+      const fav = null; // letter tile only: no favicon service request
       const ch = (m.title || m.url || '?').replace(/^https?:\/\//, '')[0]?.toUpperCase() || 'B';
       tiles.appendChild(
         mkTile(m.title || m.url, m.url, ch, fav, {

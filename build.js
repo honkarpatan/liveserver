@@ -112,7 +112,7 @@ async function bundle() {
     if (Array.isArray(pluginJson.files)) {
       for (const f of pluginJson.files) {
         const rel = String(f).replace(/\/$/, '');
-        if (rel === 'acodels' || rel === 'readme.md') continue; // already added
+        if (rel === 'acodels' || rel === 'readme.md' || rel === 'icon.png') continue; // already added (a duplicate zip entry is flagged by the Acode scanner)
         const abs = path.join(root, rel);
         if (!fs.existsSync(abs)) continue;
         const st = fs.statSync(abs);

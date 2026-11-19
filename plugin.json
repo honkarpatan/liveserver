@@ -7,7 +7,6 @@
   "icon": "icon.png",
   "files": [
     "acodels/",
-    "devtool/",
     "icon.png",
     "readme.md"
   ],

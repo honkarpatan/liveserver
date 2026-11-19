@@ -1,7 +1,7 @@
 /**
  * Open URLs the same way Acode HTML Play does:
  * - plugins/browser → cordova.exec('Browser','open',[url, theme, isConsole])
- * - fallback system.openInBrowser / System open-in-browser
+ * - fallback system.openInBrowser
  *
  * This is a top-level Android WebView (not an iframe), so sites like Google
  * work at full speed with video, cookies, etc. — no node proxy needed.
@@ -61,17 +61,6 @@ export function openAcodeNativeBrowser(url, opts = {}) {
     }
   } catch (e) {
     console.warn('[LiveServer] system.openInBrowser', e);
-  }
-
-  // 3) Cordova System action used elsewhere in plugin
-  try {
-    if (typeof cordova !== 'undefined' && cordova.exec) {
-      cordova.exec(null, null, 'System', 'open-in-browser', [u]);
-      console.log('[LiveServer] opened via System open-in-browser', u.slice(0, 120));
-      return true;
-    }
-  } catch (e) {
-    console.warn('[LiveServer] System open-in-browser', e);
   }
 
   // 4) Last resort: window.open (often blocked or limited in WebView)

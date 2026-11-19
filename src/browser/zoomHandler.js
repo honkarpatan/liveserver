@@ -1,181 +1,166 @@
-/** Pinch / double-tap zoom for browser iframe (from acodels/zoom-handler.js) */
+/** Pinch / pan / double-tap zoom for the browser iframe (same engine as acodels/zoom-handler.js) */
 export class ZoomHandler {
   constructor(element) {
     this.element = element;
     if (!this.element) return;
-    
-    this.scroller = this.element.parentNode; 
 
-    this.finalScale = 1;
-    this.offsetX = 0;
-    this.offsetY = 0;
-    
-    this.tempScale = 1;
-    this.tempOffsetX = 0;
-    this.tempOffsetY = 0;
-
-    this.panning = false;
-    this.isPanningContent = false;
-    
-    this.initialDistance = 0;
+    this.s = 1; // applied scale
+    this.tx = 0; // applied translation (px, parent space)
+    this.ty = 0;
+    this.mode = null; // 'pinch' | 'pan' | null
+    this.startDist = 1;
+    this.startScale = 1;
+    this.focal = { x: 0, y: 0 };
     this.panStart = null;
-    this.pageOrigin = null; 
+    this.lastTap = 0;
+    this.tapStart = null;
 
-    this.handleTouchStart = this.handleTouchStart.bind(this);
-    this.handleTouchMove = this.handleTouchMove.bind(this);
-    this.handleTouchEnd = this.handleTouchEnd.bind(this);
-    this.handleDoubleTap = this.handleDoubleTap.bind(this);
+    this.onStart = this.onStart.bind(this);
+    this.onMove = this.onMove.bind(this);
+    this.onEnd = this.onEnd.bind(this);
+    this.onDblClick = this.onDblClick.bind(this);
 
-    this.setupZoomEvents();
-  }
-
-  setupZoomEvents() {
-    const updateTouchAction = () => {
-      this.element.style.touchAction = this.finalScale > 1 ? 'none' : 'auto';
-    };
-    updateTouchAction();
     this.element.style.transformOrigin = '0 0';
-
-    this.onEnd = (e) => {
-      this.handleTouchEnd(e);
-      updateTouchAction();
-    };
-    this.element.addEventListener('touchstart', this.handleTouchStart);
-    this.element.addEventListener('touchmove', this.handleTouchMove);
+    this.syncTouchAction();
+    // passive:false is required, otherwise preventDefault() is ignored on <body>/<html>
+    // and the page keeps scrolling / native-zooming underneath the gesture.
+    this.element.addEventListener('touchstart', this.onStart, { passive: false });
+    this.element.addEventListener('touchmove', this.onMove, { passive: false });
     this.element.addEventListener('touchend', this.onEnd);
-    this.element.addEventListener('touchcancel', this.handleTouchEnd);
-    this.element.addEventListener('dblclick', this.handleDoubleTap);
+    this.element.addEventListener('touchcancel', this.onEnd);
+    this.element.addEventListener('dblclick', this.onDblClick);
   }
 
   destroy() {
-    this.element.removeEventListener('touchstart', this.handleTouchStart);
-    this.element.removeEventListener('touchmove', this.handleTouchMove);
+    if (!this.element) return;
+    this.element.removeEventListener('touchstart', this.onStart);
+    this.element.removeEventListener('touchmove', this.onMove);
     this.element.removeEventListener('touchend', this.onEnd);
-    this.element.removeEventListener('touchcancel', this.handleTouchEnd);
-    this.element.removeEventListener('dblclick', this.handleDoubleTap);
-    // leave the frame exactly as a normal, un-zoomed one
-    this.finalScale = 1;
+    this.element.removeEventListener('touchcancel', this.onEnd);
+    this.element.removeEventListener('dblclick', this.onDblClick);
+    this.s = 1;
+    this.tx = 0;
+    this.ty = 0;
     this.element.style.transform = '';
     this.element.style.transformOrigin = '';
     this.element.style.touchAction = '';
   }
-  
-  getDistance(p1, p2) {
-    const dx = p1.clientX - p2.clientX;
-    const dy = p1.clientY - p2.clientY;
-    return Math.sqrt(dx * dx + dy * dy);
+
+  syncTouchAction() {
+    this.element.style.touchAction = this.s > 1.001 ? 'none' : 'auto';
   }
-  
-  getPageCoordinates(e_touches) {
-    if (!this.scroller || !this.scroller.getBoundingClientRect) {
-      this.scroller = this.element.parentNode;
-      
-      if (!this.scroller || !this.scroller.getBoundingClientRect) {
-        console.error("ZoomHandler Error: Cannot find scroller parent element.");
-        return null; 
+
+  apply(s, tx, ty) {
+    this.s = s;
+    this.tx = tx;
+    this.ty = ty;
+    this.element.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + s + ')';
+  }
+
+  mid(t) {
+    return { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 };
+  }
+
+  dist(t) {
+    const dx = t[0].clientX - t[1].clientX;
+    const dy = t[0].clientY - t[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy) || 1;
+  }
+
+  beginPinch(touches) {
+    const r = this.element.getBoundingClientRect();
+    const m = this.mid(touches);
+    this.mode = 'pinch';
+    this.startDist = this.dist(touches);
+    this.startScale = this.s;
+    this.focal = { x: (m.x - r.left) / this.s, y: (m.y - r.top) / this.s };
+  }
+
+  beginPan(touch) {
+    this.mode = 'pan';
+    this.panStart = { x: touch.clientX, y: touch.clientY, tx: this.tx, ty: this.ty };
+  }
+
+  onStart(e) {
+    if (e.touches.length >= 2) {
+      if (e.cancelable) e.preventDefault();
+      this.tapStart = null;
+      this.beginPinch(e.touches);
+    } else if (e.touches.length === 1) {
+      const t = e.touches[0];
+      this.tapStart = { x: t.clientX, y: t.clientY, at: Date.now() };
+      if (this.s > 1.001) this.beginPan(t);
+    }
+  }
+
+  onMove(e) {
+    if (this.tapStart && e.touches[0]) {
+      const t = e.touches[0];
+      if (Math.abs(t.clientX - this.tapStart.x) > 10 || Math.abs(t.clientY - this.tapStart.y) > 10) {
+        this.tapStart = null;
       }
     }
-
-    const scrollerRect = this.scroller.getBoundingClientRect();
-    const scrollLeft = this.scroller.scrollLeft;
-    const scrollTop = this.scroller.scrollTop;
-
-    const screenX = (e_touches[0].clientX + (e_touches[1]?.clientX || e_touches[0].clientX)) / e_touches.length;
-    const screenY = (e_touches[0].clientY + (e_touches[1]?.clientY || e_touches[0].clientY)) / e_touches.length;
-
-    const x_in_scroller_viewport = screenX - scrollerRect.left;
-    const y_in_scroller_viewport = screenY - scrollerRect.top;
-
-    return {
-      x: x_in_scroller_viewport + scrollLeft,
-      y: y_in_scroller_viewport + scrollTop
-    };
-  }
-
-  handleTouchStart(e) {
-    if (e.touches.length === 2) {
-      e.preventDefault();
-      
-      this.pageOrigin = this.getPageCoordinates(e.touches);
-      if (!this.pageOrigin) return; 
-
-      this.panning = true; 
-      this.initialDistance = this.getDistance(e.touches[0], e.touches[1]);
-      
-    } else if (e.touches.length === 1 && this.finalScale > 1) {
-      const trueHit = this.getPageCoordinates(e.touches);
-      if (!trueHit) return; 
-
-      this.isPanningContent = true;
-      this.panStart = {
-        x: trueHit.x - this.offsetX,
-        y: trueHit.y - this.offsetY,
-      };
+    if (this.mode === 'pinch' && e.touches.length >= 2) {
+      if (e.cancelable) e.preventDefault();
+      const m = this.mid(e.touches);
+      const s = Math.max(0.5, Math.min(5, (this.startScale * this.dist(e.touches)) / this.startDist));
+      // element origin in the viewport WITHOUT our translation = (origin - scroll), read live
+      const r = this.element.getBoundingClientRect();
+      const baseX = r.left - this.tx;
+      const baseY = r.top - this.ty;
+      this.apply(s, m.x - s * this.focal.x - baseX, m.y - s * this.focal.y - baseY);
+    } else if (this.mode === 'pan' && e.touches.length === 1) {
+      if (e.cancelable) e.preventDefault();
+      const t = e.touches[0];
+      this.apply(
+        this.s,
+        this.panStart.tx + (t.clientX - this.panStart.x),
+        this.panStart.ty + (t.clientY - this.panStart.y)
+      );
     }
   }
 
-  handleTouchMove(e) {
-    const element = e.currentTarget;
-
-    if (this.panning && e.touches.length === 2) {
-      e.preventDefault();
-      
-      const currentDistance = this.getDistance(e.touches[0], e.touches[1]);
-      const gestureRatio = currentDistance / this.initialDistance;
-      
-      this.tempScale = this.finalScale * gestureRatio;
-      this.tempScale = Math.max(0.5, Math.min(this.tempScale, 5));
-
-      const scaleRatio = this.tempScale / this.finalScale;
-      this.tempOffsetX = this.pageOrigin.x * (1 - scaleRatio) + this.offsetX * scaleRatio;
-      this.tempOffsetY = this.pageOrigin.y * (1 - scaleRatio) + this.offsetY * scaleRatio;
-
-      element.style.transform = `translate(${this.tempOffsetX}px, ${this.tempOffsetY}px) scale(${this.tempScale})`;
+  onEnd(e) {
+    const left = e.touches ? e.touches.length : 0;
+    if (this.mode === 'pinch') {
+      if (left === 1 && this.s > 1.001) this.beginPan(e.touches[0]);
+      else this.mode = left >= 2 ? 'pinch' : null;
+      if (left >= 2) this.beginPinch(e.touches);
+    } else if (left === 0) {
+      this.mode = null;
     }
-
-    else if (this.isPanningContent && e.touches.length === 1 && this.finalScale > 1) {
-      e.preventDefault();
-      
-      const trueHit = this.getPageCoordinates(e.touches);
-      if (!trueHit) return; 
-      
-      this.tempOffsetX = trueHit.x - this.panStart.x;
-      this.tempOffsetY = trueHit.y - this.panStart.y;
-      
-      element.style.transform = `translate(${this.tempOffsetX}px, ${this.tempOffsetY}px) scale(${this.finalScale})`;
-    }
-  }
-  
-  handleTouchEnd(e) {
-    if (this.panning) {
-      this.panning = false;
-      this.finalScale = this.tempScale;
-      this.offsetX = this.tempOffsetX;
-      this.offsetY = this.tempOffsetY;
-      this.pageOrigin = null; 
-    }
-    if (this.isPanningContent) {
-      this.isPanningContent = false;
-      this.offsetX = this.tempOffsetX;
-      this.offsetY = this.tempOffsetY;
+    if (left === 0) {
+      if (this.s > 0.97 && this.s < 1.03) this.reset(false); // snap back to exactly 1
+      this.syncTouchAction();
+      // double tap -> reset
+      if (this.tapStart && e.type === 'touchend') {
+        const now = Date.now();
+        if (now - this.lastTap < 320 && this.s !== 1) this.reset(true);
+        this.lastTap = now;
+      }
+      this.tapStart = null;
+    } else {
+      this.syncTouchAction();
     }
   }
 
-  handleDoubleTap(e) {
-    const element = e.currentTarget;
-    this.finalScale = 1;
-    this.tempScale = 1;
-    this.offsetX = 0;
-    this.offsetY = 0;
-    this.tempOffsetX = 0;
-    this.tempOffsetY = 0;
-    
-    element.style.transition = 'transform 0.25s ease';
-    element.style.transformOrigin = '0 0';
-    element.style.transform = 'translate(0,0) scale(1)';
-    setTimeout(() => {
-      element.style.transition = '';
-    }, 300);
+  onDblClick() {
+    if (this.s !== 1) this.reset(true);
+  }
+
+  reset(animate) {
+    const el = this.element;
+    this.s = 1;
+    this.tx = 0;
+    this.ty = 0;
+    this.mode = null;
+    if (animate) {
+      el.style.transition = 'transform 0.25s ease';
+      setTimeout(() => {
+        el.style.transition = '';
+      }, 300);
+    }
+    el.style.transform = 'translate(0px, 0px) scale(1)';
+    this.syncTouchAction();
   }
 }
-

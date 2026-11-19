@@ -231,7 +231,7 @@ function onBridgeMessage(ev) {
     emit();
   } else if (d.type === 'need-devtools') {
     loadDevtoolCode().then((code) => {
-      if (!code) return toast('Suger DevTool file missing (devtool/suger-dev.js). Reinstall the plugin.', 3500);
+      if (!code) return; // loader already told the user (declined / offline / hash mismatch)
       sendToTab(tab, 'devtools', { on: true, code });
     });
   } else if (d.type === 'devtools-error') {

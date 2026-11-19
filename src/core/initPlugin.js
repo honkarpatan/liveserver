@@ -74,7 +74,7 @@ export async function initPlugin(_baseUrl) {
     });
   } catch (_) {}
 
-  console.log('[LiveServer] v2 init', baseUrl);
+  // console.log('[LiveServer] v2 init', baseUrl);
 }
 
 export function destroyPlugin() {

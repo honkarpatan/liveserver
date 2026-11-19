@@ -85,13 +85,13 @@ export async function silentExec(command, opts = {}) {
   }
 
   const wrapped = wrapSh(command);
-  console.log('[LiveServer:exec] run len=', wrapped.length);
+  // console.log('[LiveServer:exec] run len=', wrapped.length);
 
   const run = async () => {
     try {
       const raw = await executor.execute(wrapped, alpine);
       const out = normalizeOutput(raw);
-      console.log('[LiveServer:exec] ok len=', out.length);
+      // console.log('[LiveServer:exec] ok len=', out.length);
       return out;
     } catch (e) {
       // Executor often rejects on non-zero exit — still return stderr text
@@ -106,7 +106,7 @@ export async function silentExec(command, opts = {}) {
       run(),
       new Promise((resolve) =>
         setTimeout(() => {
-          console.warn('[LiveServer:exec] timeout', timeoutMs, 'ms — continuing');
+          // console.warn('[LiveServer:exec] timeout', timeoutMs, 'ms — continuing');
           resolve('');
         }, timeoutMs)
       ),

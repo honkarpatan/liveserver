@@ -536,7 +536,7 @@ async function initTransport() {
   shellOut('rm -f ' + q(CACHE_HOST + '/' + tag), 8000).catch(() => {});
 
   transport = found ? { mode: 'direct', androidCache: found, verified: false } : { mode: 'shell' };
-  console.log('[LiveServer:mirror] transport', transport.mode, found || '');
+  // console.log('[LiveServer:mirror] transport', transport.mode, found || '');
   return transport;
 }
 
@@ -886,7 +886,7 @@ export function ensureProjectMirror(opts = {}) {
     } catch (_) {}
 
     startPolling();
-    console.log('[LiveServer:mirror] ready', aroot, 'files=', state.files.size, 'mode=', transport.mode);
+    // console.log('[LiveServer:mirror] ready', aroot, 'files=', state.files.size, 'mode=', transport.mode);
     // toast('Mirrored ' + state.files.size + ' file(s) · auto-sync on', 2200);
     return aroot;
   });

@@ -12,8 +12,8 @@ function fallbackExternalBrowser(url) {
       window.cordova.InAppBrowser.open(url, '_system');
       return true;
     }
-    if (window.cordova?.exec) {
-      window.cordova.exec(null, null, 'System', 'open-in-browser', [url]);
+    if (window.system?.openInBrowser) {
+      window.system.openInBrowser(url);
       return true;
     }
     window.open(url, '_blank', 'noopener');

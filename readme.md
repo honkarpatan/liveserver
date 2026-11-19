@@ -19,6 +19,11 @@ Local HTTP preview with **live reload**, in-app browser with auto setup — for 
   Working on Any path but Prefer Acode <b>Terminal Public</b> OR <b>Acode Storage</b> , SDcard or Other Storage may fail on Some Device !
 </div>
 
+<div style="border-left: 4px solid #1a73e8; background: rgba(26,115,232,0.10); padding: 10px 15px; border-radius: 3px; margin: 12px 0;">
+<b>Network &amp; privacy</b><br>
+  The preview server runs locally (<code>127.0.0.1</code>); the plugin has no analytics, telemetry or license server and only reaches the internet when <i>you</i> browse a site. <b>Developer tools</b> is optional: on first use, after you confirm, it downloads the open-source <a href="https://github.com/Sou6900/suger-devtool">Suger DevTool</a> (2.7 MB) from GitHub, verifies a fixed SHA-256 and caches it. It runs only inside the page you preview (it hooks that page's <code>fetch</code>/<code>XMLHttpRequest</code> to show the Network panel) and sends nothing anywhere.
+</div>
+
 ---
 
 <p align="center">
@@ -32,7 +37,7 @@ Local HTTP preview with **live reload**, in-app browser with auto setup — for 
 
 ## Preview 
 
- <div style="display:flex;text-align: center;overflow-x:scroll;">
+ <div style="display:flex;text-align: center;overflow-x:scroll; gap:5px;">
   <img src="https://i.postimg.cc/wvBNwQpy/Green-Fox-Html-Server-Page.png" alt="Green-fox-live-server-startpage" style="width: 400px;">
   <img src="https://i.postimg.cc/rpKGcRgY/green-fox-server-homepage.jpg" alt="Green-fox-live-server-startpage" style="width: 400px;">
 </div>
@@ -141,4 +146,12 @@ If start fails with “Folder not reachable from Alpine”, pick a root under Ac
 
 ## License
 
-See repository license file.
+Proprietary
+
+### Author
+
+**Devs. Sou** <br>
+*Green Fox - HTML Server for Acode Editor*  
+<a href="https://t.me/sourav0chand" target="_blank">
+  <img src="https://cdn.jsdelivr.net/gh/simple-icons/simple-icons/icons/telegram.svg" width="16" style="vertical-align: middle;"/> Telegram
+</a>

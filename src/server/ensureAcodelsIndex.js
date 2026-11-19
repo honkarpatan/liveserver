@@ -2,7 +2,7 @@ import { silentExec, shellEscape, silentExecScript } from '../utils/alpineExec.j
 import { ACODELS_INDEX_B64 } from './acodelsIndexB64.js';
 
 /**
- * Restore full vendored acodels/index.js if missing, stub, or lacking ls-proxy-v9.
+ * Restore full vendored acodels/index.js if missing, stub, or lacking ls-proxy-v10.
  */
 export async function ensureFullAcodelsIndex(acodelsPath) {
   const dir = acodelsPath || '/root/.acode_liveserver/acodels';
@@ -11,7 +11,7 @@ export async function ensureFullAcodelsIndex(acodelsPath) {
       'D=' +
         shellEscape(dir) +
         '; if [ ! -f "$D/index.js" ]; then echo NEED; exit 0; fi; ' +
-        'if grep -q WebSocket "$D/index.js" 2>/dev/null && grep -q chokidar "$D/index.js" 2>/dev/null && grep -q ls-proxy-v9 "$D/index.js" 2>/dev/null; then echo FULL; else echo NEED; fi',
+        'if grep -q WebSocket "$D/index.js" 2>/dev/null && grep -q chokidar "$D/index.js" 2>/dev/null && grep -q ls-proxy-v10 "$D/index.js" 2>/dev/null; then echo FULL; else echo NEED; fi',
       { timeoutMs: 8000 }
     );
     if (String(check).includes('FULL') && !String(check).includes('NEED')) {
